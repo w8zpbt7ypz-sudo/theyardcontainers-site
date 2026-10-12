@@ -4,3 +4,4 @@ yards.db
 __pycache__/
 *.bak
 *.prerebrand.bak
+server.log
