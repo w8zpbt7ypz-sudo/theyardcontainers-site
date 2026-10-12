@@ -1,0 +1,6 @@
+yards.db
+*.db
+.env
+__pycache__/
+*.bak
+*.prerebrand.bak

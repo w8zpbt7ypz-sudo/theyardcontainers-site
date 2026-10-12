@@ -1,0 +1,55 @@
+# Render Blueprint. Deploy: Render dashboard -> New -> Blueprint -> pick this repo.
+# A persistent disk requires a paid instance type (starter or above); free instances lose the SQLite file on redeploy.
+services:
+  - type: web
+    name: the-yards
+    runtime: docker
+    plan: starter
+    region: ohio
+    healthCheckPath: /healthz
+    numInstances: 1            # SQLite on one disk: keep exactly one instance
+    disk:
+      name: yards-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DB_PATH
+        value: /data/yards.db
+      - key: BASE_URL
+        sync: false              # e.g. https://theyardcontainers.com
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CRON_TOKEN
+        generateValue: true
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false              # e.g. The Yard Containers <info@theyardcontainers.com>
+      - key: ALERT_EMAIL
+        value: info@theyardcontainers.com
+      - key: DISPATCH_FROM
+        value: The Yard Containers Dispatch <dispatch@theyardcontainers.com>
+      - key: DISPATCH_REPLY_TO
+        value: dispatch@theyardcontainers.com
+      - key: REMINDER_HOUR
+        value: "9"
+      - key: TZ
+        value: America/Detroit

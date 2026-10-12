@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Yard Containers — Shipping containers. Delivered. (Mockup)</title>
+<link rel="canonical" href="https://theyardcontainers.com/">
+<style>
+:root{--bg:#f7f5f0;--ink:#1a1a1a;--mute:#6b6b6b;--line:#dcd8cf;--acc:#c8642a}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.6}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+header{border-bottom:1px solid var(--line)}
+.nav{display:flex;justify-content:space-between;align-items:center;height:68px}
+.logo{font-weight:700;letter-spacing:.04em}.logo span{color:var(--acc)}
+nav a{margin-left:24px;font-size:14px;color:var(--mute)}nav a:hover{color:var(--ink)}
+.mock{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);border:1px solid var(--line);padding:2px 8px;border-radius:2px;margin-left:12px}
+section{padding:96px 0;border-bottom:1px solid var(--line)}
+h1{font-size:clamp(40px,7vw,76px);line-height:1.05;font-weight:700;letter-spacing:-.02em}
+h2{font-size:32px;font-weight:600;letter-spacing:-.01em;margin-bottom:12px}
+.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--acc);margin-bottom:16px}
+.lead{font-size:19px;color:var(--mute);max-width:560px;margin:24px 0 36px}
+.btn{display:inline-block;padding:13px 22px;border:1px solid var(--ink);font-size:15px;margin:0 10px 10px 0}
+.btn.p{background:var(--ink);color:var(--bg)}.btn.a{border-color:var(--acc);color:var(--acc)}
+.hero{display:grid;grid-template-columns:1.2fr 1fr;gap:48px;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:24px;margin-top:40px}
+.card{border:1px solid var(--line);padding:32px;background:#fbfaf7}
+table.t{width:100%;border-collapse:collapse;font-size:14px}table.t td,table.t th{border-top:1px solid var(--line);padding:10px;text-align:left}
+.price{font-size:40px;font-weight:700;margin:12px 0 4px}.price small{font-size:15px;font-weight:400;color:var(--mute)}
+.sub{color:var(--mute);font-size:14px}
+ul.l{list-style:none;margin-top:16px}ul.l li{padding:8px 0;border-top:1px solid var(--line);font-size:15px}
+.step{font-size:13px;color:var(--acc);font-weight:600}
+details{border-top:1px solid var(--line);padding:18px 0}details summary{cursor:pointer;font-weight:600}details p{color:var(--mute);margin-top:8px}
+form{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:32px}
+label{font-size:13px;color:var(--mute);display:block;margin-bottom:6px}
+input,select,textarea{width:100%;padding:12px;border:1px solid var(--line);background:#fff;font:inherit}
+.full{grid-column:1/-1}.note{font-size:13px;color:var(--acc);margin-top:8px}
+footer{padding:48px 0;font-size:14px;color:var(--mute)}
+@media(max-width:760px){.hero{grid-template-columns:1fr}nav a:not(.cta){display:none}section{padding:64px 0}form{grid-template-columns:1fr}}
+
+.demo-bar{background:#c8642a;color:#fff;text-align:center;font-size:13px;padding:6px}
+.form{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:32px}
+table.t{width:100%;border-collapse:collapse;margin-top:16px;font-size:14px}table.t td,table.t th{border-top:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}
+.pill{font-size:12px;padding:2px 8px;border:1px solid var(--line)}.pill.available{color:#2f7a3d}.pill.sold{color:#999}.pill.rented,.pill.leased{color:var(--acc)}
+#chatbtn{position:fixed;right:24px;bottom:24px;background:var(--ink);color:var(--bg);border:0;padding:14px 18px;font:inherit;cursor:pointer;z-index:9}
+#chat{position:fixed;right:24px;bottom:84px;width:360px;max-width:calc(100vw - 32px);height:480px;background:#fff;border:1px solid var(--ink);display:none;flex-direction:column;z-index:9}
+#chat.open{display:flex}#chat .hd{padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600}#log{flex:1;overflow:auto;padding:16px;font-size:14px}
+.m{margin:8px 0;padding:10px 12px;max-width:85%}.m.b{background:#f2efe8}.m.u{background:var(--ink);color:var(--bg);margin-left:auto}
+#chat form{display:flex;border-top:1px solid var(--line)}#chat input{border:0;flex:1;padding:12px}#chat button{border:0;background:var(--acc);color:#fff;padding:0 16px}
+@media(max-width:760px){.form{grid-template-columns:1fr}}
+</style></head><body>{{DEMO_BAR}}
+<header><div class="wrap nav"><a href="#" class="logo">THE YARD <span>CONTAINERS</span><span class="mock">Prototype</span></a>
+<nav><a href="#buy">Buy</a><a href="#rent">Rent</a><a href="#jobsite">Job-site</a><a href="#faq">FAQ</a><a class="cta" href="#quote" style="color:var(--acc)">Get a quote</a></nav></div></header>
+
+<section><div class="wrap hero"><div>
+<div class="eyebrow">Kalamazoo · Comstock, MI</div>
+<h1>Shipping containers. Delivered.</h1>
+<p class="lead">Buy, rent, or lease steel containers for your property or job site — hauled by our own trucks and CDL drivers.</p>
+<a class="btn p" href="/checkout?product=buy">Buy a container</a><a class="btn" href="/checkout?product=rent">Rent storage</a><a class="btn a" href="/checkout?product=lease">Job-site lease</a></div>
+<svg viewBox="0 0 400 260" aria-label="Container illustration">
+<rect x="20" y="120" width="360" height="110" fill="none" stroke="#1a1a1a" stroke-width="2"/>
+<g stroke="#c8642a" stroke-width="1.5">
+<line x1="50" y1="120" x2="50" y2="230"/><line x1="80" y1="120" x2="80" y2="230"/><line x1="110" y1="120" x2="110" y2="230"/><line x1="140" y1="120" x2="140" y2="230"/><line x1="170" y1="120" x2="170" y2="230"/><line x1="200" y1="120" x2="200" y2="230"/><line x1="230" y1="120" x2="230" y2="230"/><line x1="260" y1="120" x2="260" y2="230"/><line x1="290" y1="120" x2="290" y2="230"/><line x1="320" y1="120" x2="320" y2="230"/><line x1="350" y1="120" x2="350" y2="230"/></g>
+<rect x="110" y="20" width="180" height="100" fill="none" stroke="#1a1a1a" stroke-width="2"/>
+<g stroke="#1a1a1a" stroke-width="1"><line x1="140" y1="20" x2="140" y2="120"/><line x1="170" y1="20" x2="170" y2="120"/><line x1="200" y1="20" x2="200" y2="120"/><line x1="230" y1="20" x2="230" y2="120"/><line x1="260" y1="20" x2="260" y2="120"/></g>
+<line x1="0" y1="240" x2="400" y2="240" stroke="#dcd8cf" stroke-width="2"/></svg></div></section>
+
+<section id="buy"><div class="wrap"><div class="eyebrow">Buy</div><h2>Used, wind &amp; watertight.</h2><p class="sub">Box price plus delivery by ZIP code — check yours below.</p>
+<div class="grid">
+<div class="card"><svg viewBox="0 0 120 50" width="120"><rect x="1" y="5" width="60" height="40" fill="none" stroke="#1a1a1a"/><g stroke="#c8642a"><line x1="16" y1="5" x2="16" y2="45"/><line x1="31" y1="5" x2="31" y2="45"/><line x1="46" y1="5" x2="46" y2="45"/></g></svg>
+<h3>20' standard</h3><div class="price">$1,945 <small>at our yard</small></div><div class="sub">+ delivery by ZIP · from $2,095 delivered nearby</div><p style="margin-top:16px"><a class="btn p" href="/checkout?product=buy&size=20">Buy 20'</a></p>
+<ul class="l"><li>20' × 8' × 8'6"</li><li>~1,165 cu ft</li><li>Needs ~70–80 ft straight access</li></ul></div>
+<div class="card"><svg viewBox="0 0 120 50" width="120"><rect x="1" y="5" width="118" height="40" fill="none" stroke="#1a1a1a"/><g stroke="#c8642a"><line x1="16" y1="5" x2="16" y2="45"/><line x1="31" y1="5" x2="31" y2="45"/><line x1="46" y1="5" x2="46" y2="45"/><line x1="61" y1="5" x2="61" y2="45"/><line x1="76" y1="5" x2="76" y2="45"/><line x1="91" y1="5" x2="91" y2="45"/><line x1="106" y1="5" x2="106" y2="45"/></g></svg>
+<h3>40' standard</h3><div class="price">$2,545 <small>at our yard</small></div><div class="sub">+ delivery by ZIP · from $2,695 delivered nearby</div><p style="margin-top:16px"><a class="btn p" href="/checkout?product=buy&size=40">Buy 40'</a></p>
+<ul class="l"><li>40' × 8' × 8'6"</li><li>~2,350 cu ft</li><li>Needs ~120–130 ft straight access</li></ul></div></div></div></section>
+
+<section id="zip"><div class="wrap"><div class="eyebrow">Delivery</div><h2>Check your delivery price.</h2>
+<p class="sub">Priced by road distance from our Comstock yard (5672 E Michigan Ave). Same fee for rental delivery, swap and pickup.</p>
+<div style="display:flex;gap:12px;margin-top:28px;max-width:440px"><input id="zipin" maxlength="5" inputmode="numeric" placeholder="ZIP code" style="flex:1;padding:14px;border:1px solid var(--line);font:inherit;font-size:18px">
+<button class="btn p" style="margin:0" onclick="zipcheck()">Check</button></div><div id="zipout" style="margin-top:24px"></div>
+<table class="t" style="max-width:520px;margin-top:32px"><tr><th>Road miles</th><th>Delivery</th></tr><tr><td>0–15</td><td>$150</td></tr><tr><td>15–30</td><td>$200</td></tr><tr><td>30–60</td><td>$250</td></tr><tr><td>60–100</td><td>$300</td></tr><tr><td>Over 100</td><td>Call for quote</td></tr></table></div></section>
+<script>async function zipcheck(){const z=zipin.value.trim();const r=await (await fetch('/api/delivery?zip='+z)).json();
+zipout.innerHTML=r.error?'<p class="sub">'+r.error+'</p>':(r.fee==null?`<p><b>${r.zip}</b> · ~${r.miles} road mi — <b>call for a quote</b> at [phone].</p>`:
+`<div class="grid" style="margin-top:0"><div class="card"><div class="step">ZIP ${r.zip} · ~${r.miles} road mi</div><div class="price">$${r.fee} <small>delivery</small></div></div>
+<div class="card"><h3>20' delivered</h3><div class="price">$${r.buy_delivered["20"].toLocaleString()}</div></div><div class="card"><h3>40' delivered</h3><div class="price">$${r.buy_delivered["40"].toLocaleString()}</div></div></div>`)}
+zipin.addEventListener('keydown',e=>{if(e.key==='Enter')zipcheck()})</script>
+<section id="rent"><div class="wrap"><div class="eyebrow">Rent</div><h2>Storage on your property.</h2><p class="sub">Month-to-month. Lockable steel. Delivery and pickup quoted separately.</p>
+<div class="grid">
+<div class="card"><h3>20' storage</h3><div class="price">$125 <small>/ month</small></div></div>
+<div class="card"><h3>40' storage</h3><div class="price">$175 <small>/ month</small></div><div class="sub">+ delivery by ZIP</div><p style="margin-top:16px"><a class="btn" href="/checkout?product=rent">Rent now</a></p></div>
+<div class="card"><h3>Rent-to-own</h3><div class="price">$111 <small>/ mo · 20' · 36 mo</small></div><div class="sub">40': $139/mo · 36 mo</div><p style="margin-top:16px"><a class="btn" href="/checkout?product=rto">Start rent-to-own</a></p></div></div></div></section>
+
+<section id="jobsite"><div class="wrap"><div class="eyebrow">Job-site leases</div><h2>From $175 / month.</h2><p class="sub">20' $175/mo · 40' $225/mo · delivery, swap and pickup priced by ZIP.</p><p style="margin-top:16px"><a class="btn a" href="/checkout?product=lease">Start a lease</a></p><p class="sub">Secure on-site storage for contractors, builders and crews.</p>
+<div class="grid"><div class="card"><div class="step">Delivery</div><p>Placed where you need it on site.</p></div><div class="card"><div class="step">Swap</div><p>Change size or move between jobs.</p></div><div class="card"><div class="step">Pickup</div><p>We haul it out when the job's done.</p></div></div></div></section>
+
+<section><div class="wrap"><div class="eyebrow">How it works</div><h2>Three steps.</h2>
+<div class="grid"><div class="card"><div class="step">01</div><h3>Request a quote</h3><p class="sub">Size, buy or rent, and your address.</p></div>
+<div class="card"><div class="step">02</div><h3>Confirm the drop spot</h3><p class="sub">We check access and ground.</p></div>
+<div class="card"><div class="step">03</div><h3>We deliver</h3><p class="sub">Tilt-trailer drop by our own driver.</p></div></div></div></section>
+
+<section><div class="wrap"><div class="eyebrow">Why us</div><h2>Our trucks. Our drivers. Local.</h2>
+<div class="grid"><div class="card"><h3>Own fleet</h3><p class="sub">We haul with our own trucks and tilt trailers — no brokered delivery.</p></div>
+<div class="card"><h3>CDL drivers</h3><p class="sub">Licensed, experienced operators place your container.</p></div>
+<div class="card"><h3>Based in Comstock</h3><p class="sub">Local yard means faster scheduling across Kalamazoo County.</p></div></div></div></section>
+
+<section><div class="wrap"><div class="eyebrow">Service area</div><h2>Within 30 miles of Comstock.</h2>
+<p class="sub">Kalamazoo · Portage · Comstock · Galesburg · Richland · Battle Creek area · Plainwell · Vicksburg · Schoolcraft — and beyond by quote.</p>
+<svg viewBox="0 0 300 160" width="300" style="margin-top:32px"><circle cx="150" cy="80" r="70" fill="none" stroke="#c8642a" stroke-dasharray="4 4"/><circle cx="150" cy="80" r="4" fill="#1a1a1a"/><text x="160" y="84" font-size="11" fill="#1a1a1a">Comstock</text><text x="150" y="158" font-size="10" fill="#6b6b6b" text-anchor="middle">30 mi radius</text></svg></div></section>
+
+<section id="faq"><div class="wrap"><div class="eyebrow">FAQ</div><h2>Questions.</h2>
+<details><summary>What does "wind &amp; watertight" mean?</summary><p>The container keeps weather out — no holes, working doors and seals. It may show dents and surface rust.</p></details>
+<details><summary>How much room do you need to deliver?</summary><p>Roughly 70–80 ft of straight, level access for a 20' and 120–130 ft for a 40', plus overhead clearance.</p></details>
+<details><summary>Do I need a permit?</summary><p>Rules vary by township and city. Check with your local zoning office before delivery.</p></details>
+<details><summary>Can I buy my rental later?</summary><p>Yes — ask about rent-to-own.</p></details>
+<details><summary>What surface should it sit on?</summary><p>Firm, level ground. Gravel or blocks under the corners work well.</p></details></div></section>
+
+<section id="quote"><div class="wrap"><div class="eyebrow">Quote</div><h2>Request a quote.</h2>
+<p class="lead">Use the <a href="/checkout" style="color:var(--acc)">checkout</a> or chat with our assistant (bottom right).</p></div></section>
+
+<footer><div class="wrap">© 2026 The Yard Containers · Comstock Township, MI · [phone] · <a href="mailto:info@theyardcontainers.com">info@theyardcontainers.com</a><br><span style="font-size:12px">Mockup — prices and details for review, not an offer.</span></div></footer>
+
+<button id="chatbtn" onclick="toggleChat()">Chat with us</button>
+<div id="chat"><div class="hd">The Yard Containers assistant <span class="sub" style="font-weight:400">· automated</span></div><div id="log"></div>
+<form onsubmit="send(event)"><input id="msg" placeholder="Type a message…" autocomplete="off"><button>Send</button></form></div>
+<script>
+const sid=localStorage.sid||(localStorage.sid=Math.random().toString(36).slice(2));
+function add(t,c){const d=document.createElement('div');d.className='m '+c;d.innerHTML=t.replace(/(https?:\/\/\S+)/g,'<a href="$1" style="text-decoration:underline">$1</a>');log.appendChild(d);log.scrollTop=1e9}
+function toggleChat(){chat.classList.toggle('open');if(!log.children.length)add("Hi! I can quote prices, answer questions and set up your order. Are you looking to buy, rent for storage, lease for a job site, or rent-to-own?",'b')}
+async function send(e){e.preventDefault();const m=msg.value.trim();if(!m)return;add(m.replace(/</g,'&lt;'),'u');msg.value='';
+const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,message:m})});add((await r.json()).reply.replace(/</g,'&lt;'),'b')}
+</script></body></html>
