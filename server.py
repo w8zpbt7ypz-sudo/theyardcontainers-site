@@ -19,7 +19,13 @@ STRIPE_PK = os.environ.get("STRIPE_PUBLISHABLE_KEY", "")
 PRODUCTION = os.environ.get("APP_ENV", "").lower() == "production"
 SECRET_KEY = os.environ.get("SECRET_KEY") or hashlib.sha256(("yards:" + ADMIN_PW).encode()).hexdigest()
 CRON_TOKEN = os.environ.get("CRON_TOKEN", "")
-VOICE_SECRET = os.environ.get("VOICE_SECRET", "")  # shared secret for the AI phone assistant (X-Voice-Secret)
+VOICE_SECRET = os.environ.get("VOICE_SECRET", "")
+RETELL_API_KEY = os.environ.get("RETELL_API_KEY", "")
+RETELL_AGENT_ID = os.environ.get("RETELL_AGENT_ID", "agent_99d6cc33d6d94f7e1e462f0be8")
+RETELL_API_BASE = os.environ.get("RETELL_API_BASE", "https://api.retellai.com")
+TWILIO_VOICE_URL = os.environ.get("TWILIO_VOICE_URL", "https://theyardcontainers.onrender.com/twilio/voice")
+PHONE_DISPLAY = "(855) 768-YARD (855-768-9273)"
+PHONE_TEL = "+18557689273"  # shared secret for the AI phone assistant (X-Voice-Secret)
 REMINDER_LOOP = os.environ.get("REMINDER_LOOP", "1") == "1"   # in-process day-before reminder loop
 REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", "9"))        # local hour after which day-before reminders go out
 DRIVERS = (1, 2, 3)
@@ -223,7 +229,7 @@ def notify_paid(c, o):
     what = f"{LABEL[o['product']]} {o['size']}' container"
     cust = (f"The Yard Containers: order {o['id']} is paid. Your {what} is scheduled for {when}"
             + (f" to {o['address']}." if o["mode"] == "delivered" else " for pickup at our yard (5672 E Michigan Ave, Comstock).")
-            + " Questions? Reply or call [phone].")
+            + " Questions? Reply or call (855) 768-YARD.")
     notify.send(c, "email", o["email"], f"Order {o['id']} confirmed — {when}", cust, "confirm_customer", o["id"])
     notify.send(c, "sms", o["phone"], "", cust, "confirm_customer", o["id"])
     link = f"{BASE_URL}/driver/po/{o['id']}"
@@ -353,7 +359,7 @@ def chat(sid, msg):
         q = quote_delivery(re.search(r"\b\d{5}\b", m).group(0))
         if q.get("error"): reply = "I couldn't find that ZIP. " + ASK["zip"]
         elif q["fee"] is None:
-            reply = f"ZIP {q['zip']} is about {q['miles']:.0f} road miles from Comstock — beyond our 100-mile delivery area, so our team will need to quote it. Please call [phone]."
+            reply = f"ZIP {q['zip']} is about {q['miles']:.0f} road miles from Comstock — beyond our 100-mile delivery area, so our team will need to quote it. Please call (855) 768-YARD."
             st["step"] = "quote"
         else:
             d["zip"] = q["zip"]; pre = f"Delivery to {q['zip']} (about {q['miles']:.0f} road mi): ${q['fee']}."
@@ -370,7 +376,7 @@ def chat(sid, msg):
         elif low.startswith("n"):
             st = {"step": "product", "d": {}}; reply = "No problem — let's start over. " + ASK["product"]
     elif s == "quote":
-        reply = "Our team will quote that delivery by phone at [phone]. Anything else I can help with?"
+        reply = "Our team will quote that delivery by phone at (855) 768-YARD (855-768-9273). Anything else I can help with?"
     elif s == "done":
         reply = f"Your order is {st.get('order')}. Payment link: {BASE_URL}/pay/{st.get('order')}"
     if not reply:
@@ -418,8 +424,8 @@ def checkout_form(q):
 <div class=full><label>Site conditions / notes</label><textarea name=notes rows=3></textarea></div>
 <div class=full><button class="btn p">Continue to payment</button></div></form>
 <script>async function zq(v){{if(v.length<5){{zres.textContent='';return}}const r=await (await fetch('/api/delivery?zip='+v)).json();
-zres.textContent=r.error?r.error:(r.fee==null?`${{r.miles}} road mi — over 100 mi: call for a quote at [phone]. Online payment not available.`:`${{r.miles}} road mi · delivery $${{r.fee}}`);
-const b=document.querySelector('form.form button');const m=document.querySelector('[name=mode]');const block=r.fee==null&&!(m&&m.value=='pickup');b.disabled=block;b.textContent=block?'Call for quote — [phone]':'Continue to payment'}}</script>""")
+zres.textContent=r.error?r.error:(r.fee==null?`${{r.miles}} road mi — over 100 mi: call for a quote at (855) 768-YARD (855-768-9273). Online payment not available.`:`${{r.miles}} road mi · delivery $${{r.fee}}`);
+const b=document.querySelector('form.form button');const m=document.querySelector('[name=mode]');const block=r.fee==null&&!(m&&m.value=='pickup');b.disabled=block;b.textContent=block?'Call for quote — (855) 768-YARD':'Continue to payment'}}</script>""")
 
 def pay_page(o):
     one, mon = o["one_time"], o["monthly"]
@@ -470,6 +476,23 @@ def home():
     body = open(os.path.join(ROOT, "static", "index.html")).read()
     return body.replace("{{DEMO_BAR}}", '<div class="demo-bar">DEMO PAYMENT MODE — payments are simulated.</div>' if DEMO else "")
 
+def twilio_sig_ok(url, params, sig):
+    tok = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    if not tok: return True
+    data = url + "".join(k + params[k] for k in sorted(params))
+    exp = base64.b64encode(hmac.new(tok.encode(), data.encode(), hashlib.sha1).digest()).decode()
+    return hmac.compare_digest(exp, sig or "")
+
+def retell_register_call(from_number, to_number, call_sid=""):
+    body = {"agent_id": RETELL_AGENT_ID, "from_number": from_number, "to_number": to_number, "direction": "inbound"}
+    if call_sid: body["metadata"] = {"twilio_call_sid": call_sid}
+    req = urllib.request.Request(RETELL_API_BASE + "/v2/register-phone-call", data=json.dumps(body).encode(), method="POST",
+          headers={"Authorization": "Bearer " + RETELL_API_KEY, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=8) as r: return json.loads(r.read())["call_id"]
+
+TWIML_SORRY = ('<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">Sorry, The Yard Containers can\'t take your call right now. '
+               'Please call back in a few minutes, or email info at the yard containers dot com.</Say></Response>')
+
 class H(BaseHTTPRequestHandler):
     def send(self, code, body, ctype="text/html; charset=utf-8", headers=None):
         b = body.encode() if isinstance(body, str) else body
@@ -500,7 +523,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/delivery":
             q2 = quote_delivery(q.get("zip", [""])[0]); size = q.get("size", [None])[0]
             if q2.get("miles") is not None: q2["call_for_quote"] = q2.get("fee") is None
-            if q2.get("call_for_quote"): q2["message"] = "Over 100 road miles — call for a quote at [phone]. Online payment isn't available for this ZIP."
+            if q2.get("call_for_quote"): q2["message"] = "Over 100 road miles — call for a quote at (855) 768-YARD (855-768-9273). Online payment isn't available for this ZIP."
             if q2.get("fee") is not None:
                 q2["buy_delivered"] = {sz: PRICES["buy"][sz]["pickup"] + q2["fee"] for sz in ("20", "40")}
             return self.send(200, json.dumps(q2), "application/json")
@@ -552,6 +575,18 @@ class H(BaseHTTPRequestHandler):
             for k, v in f.items():
                 if k.startswith("driver") and k.split("_", 1)[-1] in ("name", "phone", "email", "pin"): c.execute("insert or replace into settings values(?,?)", (k, v))
             c.commit(); c.close(); return self.send(200, settings_page("Saved."))
+        if p.split("?")[0] == "/twilio/voice":
+            xml = "text/xml; charset=utf-8"
+            f = {k: v[0] for k, v in urllib.parse.parse_qs(raw.decode(), keep_blank_values=True).items()}
+            if not twilio_sig_ok(TWILIO_VOICE_URL, f, self.headers.get("X-Twilio-Signature", "")):
+                logging.warning("rejected Twilio voice webhook (bad signature)"); return self.send(403, "bad signature", "text/plain")
+            try:
+                if not RETELL_API_KEY: raise RuntimeError("RETELL_API_KEY not set")
+                cid = retell_register_call(f.get("From", ""), f.get("To", ""), f.get("CallSid", ""))
+                if not re.fullmatch(r"[A-Za-z0-9_-]+", cid or ""): raise RuntimeError("bad call_id")
+                return self.send(200, f'<?xml version="1.0" encoding="UTF-8"?><Response><Dial><Sip>sip:{cid}@sip.retellai.com</Sip></Dial></Response>', xml)
+            except Exception as e:
+                logging.error("Retell register-phone-call failed: %s", e); return self.send(200, TWIML_SORRY, xml)
         if p.split("?")[0] == "/api/delivery":
             try: d = json.loads(raw or b"{}")
             except ValueError: d = {}
@@ -576,7 +611,7 @@ class H(BaseHTTPRequestHandler):
             f = {k: v[0] for k, v in urllib.parse.parse_qs(raw.decode()).items()}
             if f.get("product") != "buy": f["mode"] = "delivered"
             try: return self.redirect("/pay/" + create_order(f))
-            except ValueError as e: return self.send(400, page("Delivery quote needed", f"<div class=eyebrow>Call for quote</div><h2>{esc(e)}</h2><p>Online payment isn't available for this delivery. Call [phone] or email info@theyardcontainers.com and we'll quote it.</p><p><a class=btn href='/checkout'>Back</a></p>"))
+            except ValueError as e: return self.send(400, page("Delivery quote needed", f"<div class=eyebrow>Call for quote</div><h2>{esc(e)}</h2><p>Online payment isn't available for this delivery. Call (855) 768-YARD (855-768-9273) or email info@theyardcontainers.com and we'll quote it.</p><p><a class=btn href='/checkout'>Back</a></p>"))
         if p.startswith("/demo/pay/"):
             if not DEMO: return self.send(403, "Demo payments disabled when STRIPE_SECRET_KEY is set")
             oid = p[10:]; mark_paid(oid, "demo_" + uuid.uuid4().hex[:8]); return self.redirect("/success/" + oid)

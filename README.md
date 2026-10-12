@@ -134,5 +134,5 @@ None of these steps were done for you: no accounts were created and nothing was 
    3. Instead of SendGrid you can use any SMTP provider: set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`.
 7. **Final setup.**
    1. Log in at `/admin` (user: any, password `ADMIN_PASSWORD`), open `/admin/settings`, and enter real driver phones (+1…), emails and PINs.
-   2. Replace the `[phone]`/`[email]` placeholders in `server.py` and `static/index.html` (email is now info@theyardcontainers.com; only `[phone]` remains).
+   2. Phone placeholders are filled with (855) 768-YARD (+18557689273); email is info@theyardcontainers.com.
    3. Place one real low-value order, check `/admin/outbox` shows `sent`, then refund it.

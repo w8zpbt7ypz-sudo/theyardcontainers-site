@@ -78,7 +78,7 @@ table.t{width:100%;border-collapse:collapse;margin-top:16px;font-size:14px}table
 <button class="btn p" style="margin:0" onclick="zipcheck()">Check</button></div><div id="zipout" style="margin-top:24px"></div>
 <table class="t" style="max-width:520px;margin-top:32px"><tr><th>Road miles</th><th>Delivery</th></tr><tr><td>0–15</td><td>$150</td></tr><tr><td>15–30</td><td>$200</td></tr><tr><td>30–60</td><td>$250</td></tr><tr><td>60–100</td><td>$300</td></tr><tr><td>Over 100</td><td>Call for quote</td></tr></table></div></section>
 <script>async function zipcheck(){const z=zipin.value.trim();const r=await (await fetch('/api/delivery?zip='+z)).json();
-zipout.innerHTML=r.error?'<p class="sub">'+r.error+'</p>':(r.fee==null?`<p><b>${r.zip}</b> · ~${r.miles} road mi — <b>call for a quote</b> at [phone].</p>`:
+zipout.innerHTML=r.error?'<p class="sub">'+r.error+'</p>':(r.fee==null?`<p><b>${r.zip}</b> · ~${r.miles} road mi — <b>call for a quote</b> at <a href="tel:+18557689273">(855) 768-YARD</a>.</p>`:
 `<div class="grid" style="margin-top:0"><div class="card"><div class="step">ZIP ${r.zip} · ~${r.miles} road mi</div><div class="price">$${r.fee} <small>delivery</small></div></div>
 <div class="card"><h3>20' delivered</h3><div class="price">$${r.buy_delivered["20"].toLocaleString()}</div></div><div class="card"><h3>40' delivered</h3><div class="price">$${r.buy_delivered["40"].toLocaleString()}</div></div></div>`)}
 zipin.addEventListener('keydown',e=>{if(e.key==='Enter')zipcheck()})</script>
@@ -115,7 +115,7 @@ zipin.addEventListener('keydown',e=>{if(e.key==='Enter')zipcheck()})</script>
 <section id="quote"><div class="wrap"><div class="eyebrow">Quote</div><h2>Request a quote.</h2>
 <p class="lead">Use the <a href="/checkout" style="color:var(--acc)">checkout</a> or chat with our assistant (bottom right).</p></div></section>
 
-<footer><div class="wrap">© 2026 The Yard Containers · Comstock Township, MI · [phone] · <a href="mailto:info@theyardcontainers.com">info@theyardcontainers.com</a><br><span style="font-size:12px">Mockup — prices and details for review, not an offer.</span></div></footer>
+<footer><div class="wrap">© 2026 The Yard Containers · Comstock Township, MI · <a href="tel:+18557689273">(855) 768-YARD (855-768-9273)</a> · <a href="mailto:info@theyardcontainers.com">info@theyardcontainers.com</a><br><span style="font-size:12px">Mockup — prices and details for review, not an offer.</span></div></footer>
 
 <button id="chatbtn" onclick="toggleChat()">Chat with us</button>
 <div id="chat"><div class="hd">The Yard Containers assistant <span class="sub" style="font-weight:400">· automated</span></div><div id="log"></div>

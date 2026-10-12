@@ -39,6 +39,10 @@ services:
         sync: false
       - key: TWILIO_AUTH_TOKEN
         sync: false
+      - key: RETELL_API_KEY
+        sync: false
+      - key: RETELL_AGENT_ID
+        sync: false              # agent_99d6cc33d6d94f7e1e462f0be8
       - key: TWILIO_FROM_NUMBER
         sync: false
       - key: SENDGRID_API_KEY
