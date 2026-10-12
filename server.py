@@ -552,6 +552,15 @@ class H(BaseHTTPRequestHandler):
             for k, v in f.items():
                 if k.startswith("driver") and k.split("_", 1)[-1] in ("name", "phone", "email", "pin"): c.execute("insert or replace into settings values(?,?)", (k, v))
             c.commit(); c.close(); return self.send(200, settings_page("Saved."))
+        if p.split("?")[0] == "/api/delivery":
+            try: d = json.loads(raw or b"{}")
+            except ValueError: d = {}
+            if isinstance(d.get("args"), dict): d = d["args"]
+            q2 = quote_delivery(str(d.get("zip", "")).strip()[:5])
+            if q2.get("miles") is not None: q2["call_for_quote"] = q2.get("fee") is None
+            if q2.get("fee") is not None:
+                q2["buy_delivered"] = {sz: PRICES["buy"][sz]["pickup"] + q2["fee"] for sz in ("20", "40")}
+            return self.send(200, json.dumps(q2), "application/json")
         if p == "/api/voice/order":
             jh = {"Cache-Control": "no-store"}
             if not VOICE_SECRET: return self.send(503, json.dumps({"error": "voice ordering not configured"}), "application/json", jh)
@@ -559,6 +568,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(401, json.dumps({"error": "unauthorized"}), "application/json", jh)
             try: d = json.loads(raw or b"{}")
             except ValueError: return self.send(400, json.dumps({"error": "invalid JSON"}), "application/json", jh)
+            if isinstance(d.get("args"), dict): d = d["args"]
             code, out = voice_order(d); return self.send(code, json.dumps(out), "application/json", jh)
         if p == "/api/chat":
             d = json.loads(raw or "{}"); return self.send(200, json.dumps({"reply": chat(d.get("sid","anon"), d.get("message",""))}), "application/json")
