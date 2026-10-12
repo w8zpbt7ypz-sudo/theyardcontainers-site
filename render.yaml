@@ -23,6 +23,8 @@ services:
         generateValue: true
       - key: SECRET_KEY
         generateValue: true
+      - key: VOICE_SECRET
+        sync: false              # set from /workspace/secrets; also given to Retell
       - key: CRON_TOKEN
         generateValue: true
       - key: STRIPE_SECRET_KEY

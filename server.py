@@ -14,11 +14,12 @@ STRIPE_WHSEC = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 LLM_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
 LLM_BASE = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 LLM_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-ADMIN_PW = os.environ.get("ADMIN_PASSWORD", "demo")
+ADMIN_PW = os.environ.get("ADMIN_PASSWORD", "demo")  # "demo" is for local only; production refuses to start with it
 STRIPE_PK = os.environ.get("STRIPE_PUBLISHABLE_KEY", "")
 PRODUCTION = os.environ.get("APP_ENV", "").lower() == "production"
 SECRET_KEY = os.environ.get("SECRET_KEY") or hashlib.sha256(("yards:" + ADMIN_PW).encode()).hexdigest()
 CRON_TOKEN = os.environ.get("CRON_TOKEN", "")
+VOICE_SECRET = os.environ.get("VOICE_SECRET", "")  # shared secret for the AI phone assistant (X-Voice-Secret)
 REMINDER_LOOP = os.environ.get("REMINDER_LOOP", "1") == "1"   # in-process day-before reminder loop
 REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", "9"))        # local hour after which day-before reminders go out
 DRIVERS = (1, 2, 3)
@@ -181,6 +182,41 @@ def setting(c, k, default=""):
     r = c.execute("select v from settings where k=?", (k,)).fetchone(); return r["v"] if r else default
 def driver_info(c, i):
     return {k: setting(c, f"driver{i}_{k}") for k in ("name", "phone", "email", "pin")}
+
+VOICE_FIELDS = ("name", "phone", "email", "address", "zip", "size", "product", "mode", "date", "notes")
+def voice_order(d):
+    """Validate a phone-assistant order. Returns (status, dict)."""
+    if not isinstance(d, dict): return 400, {"error": "JSON object expected"}
+    d = {k: str(d.get(k) or "").strip() for k in VOICE_FIELDS}
+    d["size"] = d["size"].rstrip("'").replace("ft", "").strip()
+    d["product"] = d["product"].lower(); d["mode"] = (d["mode"] or "delivered").lower()
+    if d["size"] not in ("20", "40"): return 400, {"error": "size must be 20 or 40"}
+    if d["product"] not in LABEL: return 400, {"error": "product must be buy, rent, lease or rto"}
+    if d["mode"] not in ("delivered", "pickup"): return 400, {"error": "mode must be delivered or pickup"}
+    if d["product"] != "buy": d["mode"] = "delivered"
+    if not d["name"] or not d["phone"]: return 400, {"error": "name and phone are required"}
+    if d["mode"] == "delivered" and not d["zip"]: return 400, {"error": "zip is required for delivery"}
+    if d["date"]:
+        try: datetime.date.fromisoformat(d["date"])
+        except ValueError: return 400, {"error": "date must be YYYY-MM-DD"}
+    d["notes"] = ("[phone order] " + d["notes"]).strip()
+    try: oid = create_order(d)
+    except ValueError as e:
+        q = quote_delivery(d["zip"]); code = "unknown_zip" if q.get("error") else "call_for_quote"
+        return 422, {"error": str(e), "code": code, "miles": q.get("miles")}
+    c = db(); o = c.execute("select * from orders where id=?", (oid,)).fetchone(); c.close()
+    totals = {"one_time": o["one_time"], "monthly": o["monthly"], "delivery_fee": o["delivery_fee"], "miles": o["miles"]}
+    pay_url = f"{BASE_URL}/pay/{oid}"
+    alert = (f"NEW PHONE ORDER {oid} (unpaid): {LABEL[o['product']]} {o['size']}' container, {o['mode']}, {o['date']} -> {o['address'] or '-'} "
+             f"(ZIP {o['zip'] or '-'}). Customer {o['name']} {o['phone']} {o['email'] or '-'}. Due now ${o['one_time']}"
+             + (f", then ${o['monthly']}/mo" if o["monthly"] else "") + f". Notes: {o['notes']}. Pay link: {pay_url}  Admin: {BASE_URL}/admin")
+    def _alert():
+        c2 = db()
+        try: notify.send(c2, "email", notify.ALERT_EMAIL, f"New phone order {oid} — {o['name']}", alert, "alert_voice", oid); c2.commit()
+        except Exception as e: logging.warning("voice alert failed: %s", e)
+        finally: c2.close()
+    threading.Thread(target=_alert, daemon=True).start()   # don't hold the caller while mail goes out
+    return 200, {"order_id": oid, "totals": totals, "pay_url": pay_url}
 
 def notify_paid(c, o):
     d = driver_info(c, o["driver"]); when = o["date"]
@@ -516,6 +552,14 @@ class H(BaseHTTPRequestHandler):
             for k, v in f.items():
                 if k.startswith("driver") and k.split("_", 1)[-1] in ("name", "phone", "email", "pin"): c.execute("insert or replace into settings values(?,?)", (k, v))
             c.commit(); c.close(); return self.send(200, settings_page("Saved."))
+        if p == "/api/voice/order":
+            jh = {"Cache-Control": "no-store"}
+            if not VOICE_SECRET: return self.send(503, json.dumps({"error": "voice ordering not configured"}), "application/json", jh)
+            if not hmac.compare_digest(self.headers.get("X-Voice-Secret", "").encode(), VOICE_SECRET.encode()):
+                return self.send(401, json.dumps({"error": "unauthorized"}), "application/json", jh)
+            try: d = json.loads(raw or b"{}")
+            except ValueError: return self.send(400, json.dumps({"error": "invalid JSON"}), "application/json", jh)
+            code, out = voice_order(d); return self.send(code, json.dumps(out), "application/json", jh)
         if p == "/api/chat":
             d = json.loads(raw or "{}"); return self.send(200, json.dumps({"reply": chat(d.get("sid","anon"), d.get("message",""))}), "application/json")
         if p == "/order":
