@@ -70,6 +70,14 @@ def quote_delivery(zipc):
     return {"zip": zipc, "miles": miles, "fee": None}
 
 LABEL = {"buy": "Buy", "rent": "Storage rental", "lease": "Job-site lease", "rto": "Rent-to-own"}
+# Feature flag: which products are offered. Sales only for now; rental code stays intact.
+# Re-enable later with e.g. ENABLED_PRODUCTS=buy,rent (future: on-site storage at the Comstock yard).
+ENABLED = [p for p in (x.strip().lower() for x in os.environ.get("ENABLED_PRODUCTS", "buy").split(",")) if p in LABEL] or ["buy"]
+RENTALS_ON = any(p != "buy" for p in ENABLED)
+NOT_OFFERED = ("We're selling containers only right now. Storage rentals at our Comstock yard are coming soon - "
+               "call (855) 768-YARD or email info@theyardcontainers.com to get on the list.")
+def product_error(product):
+    return None if product in ENABLED else NOT_OFFERED
 FAQ = {
  "wind": "Wind & watertight means no holes, working doors and seals; it may show dents and surface rust.",
  "access": "Delivery needs about 70–80 ft of straight, level access for a 20' and 120–130 ft for a 40', plus overhead clearance.",
@@ -117,7 +125,9 @@ def truthy(v):
 
 def create_order(d):
     """Returns order id, or raises ValueError (unknown ZIP / call for quote)."""
-    product, size = d["product"], d["size"]
+    product, size = d.get("product", ""), d.get("size", "")
+    if product_error(product): raise ValueError(product_error(product))
+    if size not in ("20", "40"): raise ValueError("Size must be 20 or 40")
     mode = d.get("mode") if product == "buy" else "delivered"
     mode = mode or "delivered"
     q = {"zip": d.get("zip",""), "miles": None, "fee": 0}
@@ -205,7 +215,8 @@ def voice_order(d):
     d["size"] = d["size"].rstrip("'").replace("ft", "").strip()
     d["product"] = d["product"].lower(); d["mode"] = (d["mode"] or "delivered").lower()
     if d["size"] not in ("20", "40"): return 400, {"error": "size must be 20 or 40"}
-    if d["product"] not in LABEL: return 400, {"error": "product must be buy, rent, lease or rto"}
+    if d["product"] not in LABEL: return 400, {"error": "product must be one of: " + ", ".join(ENABLED)}
+    if product_error(d["product"]): return 400, {"error": "product_not_offered", "message": NOT_OFFERED, "enabled_products": ENABLED}
     if d["mode"] not in ("delivered", "pickup"): return 400, {"error": "mode must be delivered or pickup"}
     if d["product"] != "buy": d["mode"] = "delivered"
     if not d["name"] or not d["phone"]: return 400, {"error": "name and phone are required"}
@@ -314,6 +325,10 @@ def bands_text():
     return "; ".join(out) + f"; over {lo} mi call for quote"
 
 def price_sheet():
+    b = PRICES["buy"]
+    if not RENTALS_ON:
+        return (f"Buy: 20' ${b['20']['pickup']:,}, 40' ${b['40']['pickup']:,} at our yard, plus delivery by ZIP. "
+                f"Delivery by road miles from Comstock: {bands_text()}.")
     b, r, l, t = PRICES["buy"], PRICES["rent"], PRICES["lease"], PRICES["rto"]
     return (f"Buy: 20' ${b['20']['pickup']:,}, 40' ${b['40']['pickup']:,} at our yard, plus delivery by ZIP. "
             f"Storage rental: 20' ${r['20']['monthly']}/mo, 40' ${r['40']['monthly']}/mo. "
@@ -348,6 +363,8 @@ def llm_rephrase(text, user_msg):
         return text
 
 def chat(sid, msg):
+    if not RENTALS_ON and ASK["product"].startswith("Are you looking to buy, rent"):
+        ASK["product"] = "Are you looking to buy a container? (Say 'buy' — storage rentals are coming soon.)"
     c = db(); row = c.execute("select state from chats where sid=?", (sid,)).fetchone()
     st = json.loads(row["state"]) if row else {"step": "product", "d": {}}
     d, m, low = st["d"], msg.strip(), msg.strip().lower()
@@ -357,6 +374,8 @@ def chat(sid, msg):
     if s == "product":
         for k, pat in [("rto", r"rent.?to.?own|rto"), ("lease", r"lease|job.?site"), ("rent", r"rent|storage"), ("buy", r"buy|purchase")]:
             if re.search(pat, low): d["product"] = k; break
+        if d.get("product") and product_error(d["product"]):
+            d.pop("product"); reply = NOT_OFFERED + " " + ASK["product"]
     elif s == "size":
         mm = re.search(r"\b(20|40)\b", low)
         if mm: d["size"] = mm.group(1)
@@ -409,9 +428,10 @@ def chat(sid, msg):
 
 # ---------------- HTML ----------------
 CSS = open(os.path.join(ROOT, "static", "style.css")).read()
+RENT_NAV = '<a href="/#rent">Rent</a><a href="/#jobsite">Job-site</a>'
 def page(title, body, sub=""):
     return f"""<!DOCTYPE html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{title}</title><style>{CSS}</style></head>
-<body><header><div class="wrap nav"><a href="/" class="logo">THE YARD <span>CONTAINERS</span></a><nav><a href="/#buy">Buy</a><a href="/#rent">Rent</a><a href="/#jobsite">Job-site</a>{sub}</nav></div></header>
+<body><header><div class="wrap nav"><a href="/" class="logo">THE YARD <span>CONTAINERS</span></a><nav><a href="/#buy">Buy</a>{RENT_NAV if RENTALS_ON else ''}{sub}</nav></div></header>
 {('<div class="demo-bar">DEMO PAYMENT MODE — no Stripe key set; payments are simulated, nothing is charged.</div>' if DEMO else '')}
 <main class="wrap" style="padding:48px 24px">{body}</main></body></html>"""
 
@@ -419,12 +439,13 @@ def esc(x): return html.escape(str(x if x is not None else ""))
 
 def checkout_form(q):
     product = q.get("product", ["buy"])[0]; size = q.get("size", ["20"])[0]
-    opts = "".join(f"<option value={k} {'selected' if k==product else ''}>{v}</option>" for k, v in LABEL.items())
+    if product not in ENABLED: product = ENABLED[0]
+    opts = "".join(f"<option value={k} {'selected' if k==product else ''}>{v}</option>" for k, v in LABEL.items() if k in ENABLED)
     return page("Checkout", f"""<div class=eyebrow>Checkout</div><h2>Order a container</h2><p class=sub>{esc(price_sheet())}</p>
 <form method=post action="/order" class=form>
 <div><label>Product</label><select name=product>{opts}</select></div>
 <div><label>Size</label><select name=size><option {'selected' if size=='20' else ''}>20</option><option {'selected' if size=='40' else ''}>40</option></select></div>
-<div><label>Buy only: delivery</label><select name=mode><option value=delivered>Delivered (fee by ZIP)</option><option value=pickup>Yard pickup</option></select></div>
+<div><label>{'Buy only: delivery' if RENTALS_ON else 'Delivery or pickup'}</label><select name=mode><option value=delivered>Delivered (fee by ZIP)</option><option value=pickup>Yard pickup</option></select></div>
 <div><label>Delivery ZIP</label><input name=zip id=zip maxlength=5 oninput="zq(this.value)"><div id=zres class=sub></div></div>
 <div><label>Date</label><input name=date type=date required></div>
 <div><label>Name</label><input name=name required></div><div><label>Phone</label><input name=phone required></div>
@@ -483,6 +504,9 @@ def driver_page(n, po_prefix='/po/'):
 
 def home():
     body = open(os.path.join(ROOT, "static", "index.html")).read()
+    keep, drop = ("rentals", "salesonly") if RENTALS_ON else ("salesonly", "rentals")
+    body = re.sub(rf"<!--IF:{drop}-->.*?<!--/IF:{drop}-->", "", body, flags=re.S)
+    body = body.replace(f"<!--IF:{keep}-->", "").replace(f"<!--/IF:{keep}-->", "")
     return body.replace("{{DEMO_BAR}}", '<div class="demo-bar">DEMO PAYMENT MODE — payments are simulated.</div>' if DEMO else "")
 
 def twilio_sig_ok(url, params, sig):
@@ -620,7 +644,9 @@ class H(BaseHTTPRequestHandler):
             f = {k: v[0] for k, v in urllib.parse.parse_qs(raw.decode()).items()}
             if f.get("product") != "buy": f["mode"] = "delivered"
             try: return self.redirect("/pay/" + create_order(f))
-            except ValueError as e: return self.send(400, page("Delivery quote needed", f"<div class=eyebrow>Call for quote</div><h2>{esc(e)}</h2><p>Online payment isn't available for this delivery. Call (855) 768-YARD (855-768-9273) or email info@theyardcontainers.com and we'll quote it.</p><p><a class=btn href='/checkout'>Back</a></p>"))
+            except ValueError as e:
+                if str(e) == NOT_OFFERED or str(e).startswith("Size"): return self.send(400, page("Not available", f"<div class=eyebrow>Sales only</div><h2>{esc(e)}</h2><p><a class=btn href='/checkout'>Back</a></p>"))
+                return self.send(400, page("Delivery quote needed", f"<div class=eyebrow>Call for quote</div><h2>{esc(e)}</h2><p>Online payment isn't available for this delivery. Call (855) 768-YARD (855-768-9273) or email info@theyardcontainers.com and we'll quote it.</p><p><a class=btn href='/checkout'>Back</a></p>"))
         if p.startswith("/demo/pay/"):
             if not DEMO: return self.send(403, "Demo payments disabled when STRIPE_SECRET_KEY is set")
             oid = p[10:]; mark_paid(oid, "demo_" + uuid.uuid4().hex[:8]); return self.redirect("/success/" + oid)

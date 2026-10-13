@@ -48,13 +48,13 @@ table.t{width:100%;border-collapse:collapse;margin-top:16px;font-size:14px}table
 @media(max-width:760px){.form{grid-template-columns:1fr}}
 </style></head><body>{{DEMO_BAR}}
 <header><div class="wrap nav"><a href="#" class="logo">THE YARD <span>CONTAINERS</span><span class="mock">Prototype</span></a>
-<nav><a href="#buy">Buy</a><a href="#rent">Rent</a><a href="#jobsite">Job-site</a><a href="#faq">FAQ</a><a class="cta" href="#quote" style="color:var(--acc)">Get a quote</a></nav></div></header>
+<nav><a href="#buy">Buy</a><!--IF:rentals--><a href="#rent">Rent</a><a href="#jobsite">Job-site</a><!--/IF:rentals--><a href="#faq">FAQ</a><a class="cta" href="#quote" style="color:var(--acc)">Get a quote</a></nav></div></header>
 
 <section><div class="wrap hero"><div>
 <div class="eyebrow">Kalamazoo · Comstock, MI</div>
 <h1>Shipping containers. Delivered.</h1>
-<p class="lead">Buy, rent, or lease steel containers for your property or job site — hauled by our own trucks and CDL drivers.</p>
-<a class="btn p" href="/checkout?product=buy">Buy a container</a><a class="btn" href="/checkout?product=rent">Rent storage</a><a class="btn a" href="/checkout?product=lease">Job-site lease</a></div>
+<!--IF:rentals--><p class="lead">Buy, rent, or lease steel containers for your property or job site — hauled by our own trucks and CDL drivers.</p><!--/IF:rentals--><!--IF:salesonly--><p class="lead">Buy used, wind &amp; watertight steel containers for your property or business — delivered by our own trucks and CDL drivers.</p><!--/IF:salesonly-->
+<a class="btn p" href="/checkout?product=buy">Buy a container</a><!--IF:rentals--><a class="btn" href="/checkout?product=rent">Rent storage</a><a class="btn a" href="/checkout?product=lease">Job-site lease</a><!--/IF:rentals--><!--IF:salesonly--><a class="btn" href="#zip">Check delivery price</a><!--/IF:salesonly--></div>
 <svg viewBox="0 0 400 260" aria-label="Container illustration">
 <rect x="20" y="120" width="360" height="110" fill="none" stroke="#1a1a1a" stroke-width="2"/>
 <g stroke="#c8642a" stroke-width="1.5">
@@ -73,7 +73,7 @@ table.t{width:100%;border-collapse:collapse;margin-top:16px;font-size:14px}table
 <ul class="l"><li>40' × 8' × 8'6"</li><li>~2,350 cu ft</li><li>Needs ~120–130 ft straight access</li></ul></div></div></div></section>
 
 <section id="zip"><div class="wrap"><div class="eyebrow">Delivery</div><h2>Check your delivery price.</h2>
-<p class="sub">Priced by road distance from our Comstock yard (5672 E Michigan Ave). Same fee for rental delivery, swap and pickup.</p>
+<p class="sub">Priced by road distance from our Comstock yard (5672 E Michigan Ave).<!--IF:rentals--> Same fee for rental delivery, swap and pickup.<!--/IF:rentals--></p>
 <div style="display:flex;gap:12px;margin-top:28px;max-width:440px"><input id="zipin" maxlength="5" inputmode="numeric" placeholder="ZIP code" style="flex:1;padding:14px;border:1px solid var(--line);font:inherit;font-size:18px">
 <button class="btn p" style="margin:0" onclick="zipcheck()">Check</button></div><div id="zipout" style="margin-top:24px"></div>
 <table class="t" style="max-width:520px;margin-top:32px"><tr><th>Road miles</th><th>Delivery</th></tr><tr><td>0–15</td><td>$150</td></tr><tr><td>15–30</td><td>$200</td></tr><tr><td>30–60</td><td>$250</td></tr><tr><td>60–100</td><td>$300</td></tr><tr><td>Over 100</td><td>Call for quote</td></tr></table></div></section>
@@ -82,7 +82,7 @@ zipout.innerHTML=r.error?'<p class="sub">'+r.error+'</p>':(r.fee==null?`<p><b>${
 `<div class="grid" style="margin-top:0"><div class="card"><div class="step">ZIP ${r.zip} · ~${r.miles} road mi</div><div class="price">$${r.fee} <small>delivery</small></div></div>
 <div class="card"><h3>20' delivered</h3><div class="price">$${r.buy_delivered["20"].toLocaleString()}</div></div><div class="card"><h3>40' delivered</h3><div class="price">$${r.buy_delivered["40"].toLocaleString()}</div></div></div>`)}
 zipin.addEventListener('keydown',e=>{if(e.key==='Enter')zipcheck()})</script>
-<section id="rent"><div class="wrap"><div class="eyebrow">Rent</div><h2>Storage on your property.</h2><p class="sub">Month-to-month. Lockable steel. Delivery and pickup quoted separately.</p>
+<!--IF:rentals--><section id="rent"><div class="wrap"><div class="eyebrow">Rent</div><h2>Storage on your property.</h2><p class="sub">Month-to-month. Lockable steel. Delivery and pickup quoted separately.</p>
 <div class="grid">
 <div class="card"><h3>20' storage</h3><div class="price">$125 <small>/ month</small></div></div>
 <div class="card"><h3>40' storage</h3><div class="price">$175 <small>/ month</small></div><div class="sub">+ delivery by ZIP</div><p style="margin-top:16px"><a class="btn" href="/checkout?product=rent">Rent now</a></p></div>
@@ -91,8 +91,9 @@ zipin.addEventListener('keydown',e=>{if(e.key==='Enter')zipcheck()})</script>
 <section id="jobsite"><div class="wrap"><div class="eyebrow">Job-site leases</div><h2>From $175 / month.</h2><p class="sub">20' $175/mo · 40' $225/mo · delivery, swap and pickup priced by ZIP.</p><p style="margin-top:16px"><a class="btn a" href="/checkout?product=lease">Start a lease</a></p><p class="sub">Secure on-site storage for contractors, builders and crews.</p>
 <div class="grid"><div class="card"><div class="step">Delivery</div><p>Placed where you need it on site.</p></div><div class="card"><div class="step">Swap</div><p>Change size or move between jobs.</p></div><div class="card"><div class="step">Pickup</div><p>We haul it out when the job's done.</p></div></div></div></section>
 
-<section><div class="wrap"><div class="eyebrow">How it works</div><h2>Three steps.</h2>
-<div class="grid"><div class="card"><div class="step">01</div><h3>Request a quote</h3><p class="sub">Size, buy or rent, and your address.</p></div>
+<!--/IF:rentals--><!--IF:salesonly--><section id="storage-soon"><div class="wrap"><div class="eyebrow">Coming soon</div><h2>Storage rentals at our Comstock yard.</h2><p class="sub">On-site container storage is on the way. Call (855) 768-YARD or email info@theyardcontainers.com to get on the list.</p></div></section>
+<!--/IF:salesonly--><section><div class="wrap"><div class="eyebrow">How it works</div><h2>Three steps.</h2>
+<div class="grid"><div class="card"><div class="step">01</div><h3>Request a quote</h3><p class="sub"><!--IF:rentals-->Size, buy or rent, and your address.<!--/IF:rentals--><!--IF:salesonly-->Size, delivery or pickup, and your address.<!--/IF:salesonly--></p></div>
 <div class="card"><div class="step">02</div><h3>Confirm the drop spot</h3><p class="sub">We check access and ground.</p></div>
 <div class="card"><div class="step">03</div><h3>We deliver</h3><p class="sub">Tilt-trailer drop by our own driver.</p></div></div></div></section>
 
@@ -109,8 +110,8 @@ zipin.addEventListener('keydown',e=>{if(e.key==='Enter')zipcheck()})</script>
 <details><summary>What does "wind &amp; watertight" mean?</summary><p>The container keeps weather out — no holes, working doors and seals. It may show dents and surface rust.</p></details>
 <details><summary>How much room do you need to deliver?</summary><p>Roughly 70–80 ft of straight, level access for a 20' and 120–130 ft for a 40', plus overhead clearance.</p></details>
 <details><summary>Do I need a permit?</summary><p>Rules vary by township and city. Check with your local zoning office before delivery.</p></details>
-<details><summary>Can I buy my rental later?</summary><p>Yes — ask about rent-to-own.</p></details>
-<details><summary>What surface should it sit on?</summary><p>Firm, level ground. Gravel or blocks under the corners work well.</p></details></div></section>
+<!--IF:rentals--><details><summary>Can I buy my rental later?</summary><p>Yes — ask about rent-to-own.</p></details>
+<!--/IF:rentals--><details><summary>What surface should it sit on?</summary><p>Firm, level ground. Gravel or blocks under the corners work well.</p></details></div></section>
 
 <section id="quote"><div class="wrap"><div class="eyebrow">Quote</div><h2>Request a quote.</h2>
 <p class="lead">Use the <a href="/checkout" style="color:var(--acc)">checkout</a> or chat with our assistant (bottom right).</p></div></section>
@@ -120,10 +121,11 @@ zipin.addEventListener('keydown',e=>{if(e.key==='Enter')zipcheck()})</script>
 <button id="chatbtn" onclick="toggleChat()">Chat with us</button>
 <div id="chat"><div class="hd">The Yard Containers assistant <span class="sub" style="font-weight:400">· automated</span></div><div id="log"></div>
 <form onsubmit="send(event)"><input id="msg" placeholder="Type a message…" autocomplete="off"><button>Send</button></form></div>
+<!--IF:rentals--><script>window.GREETING="Hi! I can quote prices, answer questions and set up your order. Are you looking to buy, rent for storage, lease for a job site, or rent-to-own?"</script><!--/IF:rentals--><!--IF:salesonly--><script>window.GREETING="Hi! I can quote prices, answer questions and set up your order. Are you looking at a 20' or 40' container?"</script><!--/IF:salesonly-->
 <script>
 const sid=localStorage.sid||(localStorage.sid=Math.random().toString(36).slice(2));
 function add(t,c){const d=document.createElement('div');d.className='m '+c;d.innerHTML=t.replace(/(https?:\/\/\S+)/g,'<a href="$1" style="text-decoration:underline">$1</a>');log.appendChild(d);log.scrollTop=1e9}
-function toggleChat(){chat.classList.toggle('open');if(!log.children.length)add("Hi! I can quote prices, answer questions and set up your order. Are you looking to buy, rent for storage, lease for a job site, or rent-to-own?",'b')}
+function toggleChat(){chat.classList.toggle('open');if(!log.children.length)add(window.GREETING,'b')}
 async function send(e){e.preventDefault();const m=msg.value.trim();if(!m)return;add(m.replace(/</g,'&lt;'),'u');msg.value='';
 const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,message:m})});add((await r.json()).reply.replace(/</g,'&lt;'),'b')}
 </script></body></html>

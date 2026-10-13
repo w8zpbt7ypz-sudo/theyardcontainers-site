@@ -136,3 +136,7 @@ None of these steps were done for you: no accounts were created and nothing was 
    1. Log in at `/admin` (user: any, password `ADMIN_PASSWORD`), open `/admin/settings`, and enter real driver phones (+1…), emails and PINs.
    2. Phone placeholders are filled with (855) 768-YARD (+18557689273); email is info@theyardcontainers.com.
    3. Place one real low-value order, check `/admin/outbox` shows `sent`, then refund it.
+
+
+## Product feature flag
+`ENABLED_PRODUCTS` (comma list of buy, rent, lease, rto; default `buy`). Sales only by default: homepage rental/lease/RTO sections, nav, FAQ, checkout options and chat prompts are hidden, and `/order`, chat and `/api/voice/order` reject non-enabled products (voice returns 400 `product_not_offered`). Rental code is intact; set e.g. `ENABLED_PRODUCTS=buy,rent` on Render to turn rentals back on. Homepage blocks are marked `<!--IF:rentals-->` / `<!--IF:salesonly-->` in static/index.html.
