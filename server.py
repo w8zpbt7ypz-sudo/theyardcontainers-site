@@ -93,6 +93,8 @@ def init_db():
     CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
     """)
     c.execute("PRAGMA journal_mode=WAL")
+    cols = {r[1] for r in c.execute("PRAGMA table_info(orders)")}
+    if "sms_opt_in" not in cols: c.execute("ALTER TABLE orders ADD COLUMN sms_opt_in INTEGER NOT NULL DEFAULT 0")
     notify.init(c)
     for i in DRIVERS:   # placeholders; edit in /admin/settings
         for k, v in (("name", f"Driver {i}"), ("phone", f"[driver {i} phone]"), ("email", f"[driver {i} email]"),
@@ -109,6 +111,10 @@ def price_order(product, size, mode, fee):
         return PRICES["buy"][size]["pickup"] + (fee if mode == "delivered" else 0), 0
     return fee, PRICES[product][size]["monthly"]
 
+def truthy(v):
+    if isinstance(v, bool): return v
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on", "y")
+
 def create_order(d):
     """Returns order id, or raises ValueError (unknown ZIP / call for quote)."""
     product, size = d["product"], d["size"]
@@ -122,10 +128,11 @@ def create_order(d):
     one, mon = price_order(product, size, mode, q["fee"])
     oid = "ORD-" + uuid.uuid4().hex[:6].upper()
     c = db()
-    c.execute("insert into orders values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (oid, datetime.datetime.now().isoformat(timespec="seconds"),
+    c.execute("""insert into orders(id,created,product,size,mode,name,phone,email,address,date,notes,one_time,monthly,status,
+        stripe_session,container_id,driver,zip,miles,delivery_fee,sms_opt_in) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (oid, datetime.datetime.now().isoformat(timespec="seconds"),
         product, size, mode, d.get("name",""), d.get("phone",""), d.get("email",""), d.get("address",""),
         d.get("date") or (datetime.date.today() + datetime.timedelta(days=2)).isoformat(), d.get("notes",""), one, mon, "pending", None, None, None,
-        q.get("zip"), q.get("miles"), q.get("fee")))
+        q.get("zip"), q.get("miles"), q.get("fee"), 1 if truthy(d.get("sms_opt_in")) else 0))
     c.commit(); c.close(); return oid
 
 def assign_driver(c, date):
@@ -193,7 +200,8 @@ VOICE_FIELDS = ("name", "phone", "email", "address", "zip", "size", "product", "
 def voice_order(d):
     """Validate a phone-assistant order. Returns (status, dict)."""
     if not isinstance(d, dict): return 400, {"error": "JSON object expected"}
-    d = {k: str(d.get(k) or "").strip() for k in VOICE_FIELDS}
+    opt = truthy(d.get("sms_opt_in"))
+    d = {k: str(d.get(k) or "").strip() for k in VOICE_FIELDS}; d["sms_opt_in"] = opt
     d["size"] = d["size"].rstrip("'").replace("ft", "").strip()
     d["product"] = d["product"].lower(); d["mode"] = (d["mode"] or "delivered").lower()
     if d["size"] not in ("20", "40"): return 400, {"error": "size must be 20 or 40"}
@@ -215,7 +223,7 @@ def voice_order(d):
     pay_url = f"{BASE_URL}/pay/{oid}"
     alert = (f"NEW PHONE ORDER {oid} (unpaid): {LABEL[o['product']]} {o['size']}' container, {o['mode']}, {o['date']} -> {o['address'] or '-'} "
              f"(ZIP {o['zip'] or '-'}). Customer {o['name']} {o['phone']} {o['email'] or '-'}. Due now ${o['one_time']}"
-             + (f", then ${o['monthly']}/mo" if o["monthly"] else "") + f". Notes: {o['notes']}. Pay link: {pay_url}  Admin: {BASE_URL}/admin")
+             + (f", then ${o['monthly']}/mo" if o["monthly"] else "") + f". Text updates: {'YES (opted in)' if o['sms_opt_in'] else 'no'}. Notes: {o['notes']}. Pay link: {pay_url}  Admin: {BASE_URL}/admin")
     def _alert():
         c2 = db()
         try: notify.send(c2, "email", notify.ALERT_EMAIL, f"New phone order {oid} — {o['name']}", alert, "alert_voice", oid); c2.commit()
@@ -231,12 +239,12 @@ def notify_paid(c, o):
             + (f" to {o['address']}." if o["mode"] == "delivered" else " for pickup at our yard (5672 E Michigan Ave, Comstock).")
             + " Questions? Reply or call (855) 768-YARD.")
     notify.send(c, "email", o["email"], f"Order {o['id']} confirmed — {when}", cust, "confirm_customer", o["id"])
-    notify.send(c, "sms", o["phone"], "", cust, "confirm_customer", o["id"])
+    notify.send(c, "sms", o["phone"], "", cust + " Reply STOP to opt out.", "confirm_customer", o["id"], sms_ok=bool(o["sms_opt_in"]))
     link = f"{BASE_URL}/driver/po/{o['id']}"
     job = f"New job {o['id']} on {when}: {what} -> {o['address']} (ZIP {o['zip'] or '-'}). Customer {o['name']} {o['phone']}. Work order: {link}"
     notify.send(c, "email", d["email"], f"New job {o['id']} — {when}", job, "job_driver", o["id"], notify.DISPATCH_FROM, notify.DISPATCH_REPLY_TO)
     notify.send(c, "sms", d["phone"], "", job, "job_driver", o["id"])
-    alert = f"PAID order {o['id']}: {what}, {o['mode'] or '-'}, {when} -> {o['address']} (ZIP {o['zip'] or '-'}). Customer {o['name']} {o['phone']} {o['email']}. Driver {d['name'] or o['driver']}. Admin: {BASE_URL}/admin"
+    alert = f"PAID order {o['id']}: {what}, {o['mode'] or '-'}, {when} -> {o['address']} (ZIP {o['zip'] or '-'}). Customer {o['name']} {o['phone']} {o['email']}. Text updates: {'YES (opted in)' if o['sms_opt_in'] else 'no'}. Driver {d['name'] or o['driver']}. Admin: {BASE_URL}/admin"
     notify.send(c, "email", notify.ALERT_EMAIL, f"New paid order {o['id']} — {when}", alert, "alert_admin", o["id"])
 
 def send_reminders(today=None, force=False):
@@ -250,7 +258,7 @@ def send_reminders(today=None, force=False):
         d = driver_info(c, o["driver"])
         msg = f"Reminder from The Yard Containers: your {LABEL[o['product']]} {o['size']}' container ({o['id']}) is scheduled for tomorrow, {o['date']}. Please make sure the site is clear and accessible."
         notify.send(c, "email", o["email"], f"Tomorrow: order {o['id']}", msg, "reminder_customer", o["id"])
-        notify.send(c, "sms", o["phone"], "", msg, "reminder_customer", o["id"])
+        notify.send(c, "sms", o["phone"], "", msg + " Reply STOP to opt out.", "reminder_customer", o["id"], sms_ok=bool(o["sms_opt_in"]))
         jm = f"Reminder: job {o['id']} tomorrow {o['date']} -> {o['address']}. Work order: {BASE_URL}/driver/po/{o['id']}"
         notify.send(c, "email", d["email"], f"Tomorrow: job {o['id']}", jm, "reminder_driver", o["id"], notify.DISPATCH_FROM, notify.DISPATCH_REPLY_TO)
         notify.send(c, "sms", d["phone"], "", jm, "reminder_driver", o["id"]); n += 1
@@ -422,6 +430,7 @@ def checkout_form(q):
 <div><label>Name</label><input name=name required></div><div><label>Phone</label><input name=phone required></div>
 <div><label>Email</label><input name=email type=email required></div><div><label>Delivery address</label><input name=address required></div>
 <div class=full><label>Site conditions / notes</label><textarea name=notes rows=3></textarea></div>
+<div class=full><label style="display:flex;gap:8px;align-items:flex-start;font-weight:normal"><input type=checkbox name=sms_opt_in value=1 style="width:auto;margin-top:4px"> <span>Text me updates about my order<br><span class=sub style="font-size:.85em">By checking this box, you agree to receive order-related text messages from The Yard Containers at the phone number above. Msg &amp; data rates may apply. Msg frequency varies. Reply STOP to opt out, HELP for help. Consent not required to purchase.</span></span></label></div>
 <div class=full><button class="btn p">Continue to payment</button></div></form>
 <script>async function zq(v){{if(v.length<5){{zres.textContent='';return}}const r=await (await fetch('/api/delivery?zip='+v)).json();
 zres.textContent=r.error?r.error:(r.fee==null?`${{r.miles}} road mi — over 100 mi: call for a quote at (855) 768-YARD (855-768-9273). Online payment not available.`:`${{r.miles}} road mi · delivery $${{r.fee}}`);
@@ -442,7 +451,7 @@ def po_html(o):
     fees = f"<tr><td>Delivery</td><td>ZIP {esc(o['zip'])} · ~{o['miles']} road mi (est., straight-line × {ROAD_FACTOR}) · fee ${o['delivery_fee']}</td></tr>" if o['zip'] else "<tr><td>Delivery</td><td>Yard pickup</td></tr>"
     if o["product"] in ("rent", "lease", "rto"): fees += f"<tr><td>Swap / pickup fee (as needed)</td><td>${o['delivery_fee']} each (same band)</td></tr>"
     return page(f"Work Order {o['id']}", f"""<div class=eyebrow>Work order / PO</div><h2>{esc(o['id'])}</h2>
-<table class=t><tr><td>Created</td><td>{esc(o['created'])}</td></tr><tr><td>Customer</td><td>{esc(o['name'])} · {esc(o['phone'])} · {esc(o['email'])}</td></tr>
+<table class=t><tr><td>Created</td><td>{esc(o['created'])}</td></tr><tr><td>Customer</td><td>{esc(o['name'])} · {esc(o['phone'])} · {esc(o['email'])} · texts: {'opted in' if o['sms_opt_in'] else 'no'}</td></tr>
 <tr><td>Service</td><td>{LABEL[o['product']]} — {o['size']}' ({esc(o['mode'])})</td></tr><tr><td>Container</td><td>{esc(o['container_id'])}</td></tr>
 <tr><td>Deliver to</td><td>{esc(o['address'])}</td></tr><tr><td>Scheduled</td><td>{esc(o['date'])}</td></tr>
 <tr><td>Assigned</td><td>Driver {o['driver']} · Truck {o['driver']}</td></tr><tr><td>Site notes</td><td>{esc(o['notes']) or '—'}</td></tr>
@@ -458,8 +467,8 @@ def admin_page():
     for dt in dates:
         board += f"<tr><td>{dt}</td>" + "".join("<td>" + "<br>".join(f"<a href='/po/{o['id']}'>{o['id']}</a> {LABEL[o['product']]} {o['size']}' · {esc(o['address'])}" for o in orders if o["date"]==dt and o["driver"]==i and o["status"]=="paid") + "</td>" for i in (1,2,3)) + "</tr>"
     board += "</table>"
-    ol = "<table class=t><tr><th>Order</th><th>Customer</th><th>Product</th><th>Status</th><th>Box</th><th>Driver</th><th>PO</th></tr>" + "".join(
-        f"<tr><td>{o['id']}</td><td>{esc(o['name'])}</td><td>{LABEL[o['product']]} {o['size']}'</td><td>{o['status']}</td><td>{esc(o['container_id'] or '')}</td><td>{o['driver'] or ''}</td><td>{'<a href=/po/'+o['id']+'>PO</a>' if o['status']=='paid' else '<a href=/pay/'+o['id']+'>pay link</a>'}</td></tr>" for o in orders) + "</table>"
+    ol = "<table class=t><tr><th>Order</th><th>Customer</th><th>Product</th><th>Status</th><th>Texts</th><th>Box</th><th>Driver</th><th>PO</th></tr>" + "".join(
+        f"<tr><td>{o['id']}</td><td>{esc(o['name'])}</td><td>{LABEL[o['product']]} {o['size']}'</td><td>{o['status']}</td><td>{'✔ opted in' if o['sms_opt_in'] else '—'}</td><td>{esc(o['container_id'] or '')}</td><td>{o['driver'] or ''}</td><td>{'<a href=/po/'+o['id']+'>PO</a>' if o['status']=='paid' else '<a href=/pay/'+o['id']+'>pay link</a>'}</td></tr>" for o in orders) + "</table>"
     inv = "<table class=t><tr><th>ID</th><th>Size</th><th>Status</th><th>Order</th></tr>" + "".join(
         f"<tr><td>{b['id']}</td><td>{b['size']}'</td><td><span class='pill {b['status']}'>{b['status']}</span></td><td>{esc(b['order_id'] or '')}</td></tr>" for b in boxes) + "</table>"
     return page("Admin", f"""<div class=eyebrow>Back office</div><h2>Dispatch board</h2>{board}
