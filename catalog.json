@@ -1,0 +1,734 @@
+{
+ "version": "2026-10-13-review",
+ "status": "DRAFT - pending owner approval",
+ "legacy_sizes": {
+  "20": "20-std-wwt",
+  "40": "40-std-wwt"
+ },
+ "length_surcharge": {
+  "10": 0,
+  "20": 0,
+  "40": 0,
+  "45": 150,
+  "53": 300
+ },
+ "items": [
+  {
+   "sku": "10-std-new",
+   "length": 10,
+   "height": "std",
+   "type": "dry",
+   "condition": "New / one-trip",
+   "name": "10' standard",
+   "comp_low": 3500,
+   "comp_median": 4900,
+   "sources": [
+    "https://www.worthycontainer.com/10ft-new-one-trip-shipping-container-chicago-il/",
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "pickup": 3995,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Scarce in MI; source on demand",
+   "confidence": "Low"
+  },
+  {
+   "sku": "10-std-wwt",
+   "length": 10,
+   "height": "std",
+   "type": "dry",
+   "condition": "Used WWT (cut-down)",
+   "name": "10' standard",
+   "comp_low": 2200,
+   "comp_median": 2600,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "pickup": 2495,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Cut-down units; source on demand",
+   "confidence": "Low"
+  },
+  {
+   "sku": "20-std-asis",
+   "length": 20,
+   "height": "std",
+   "type": "dry",
+   "condition": "As-is",
+   "name": "20' standard",
+   "comp_low": 1125,
+   "comp_median": 1300,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/",
+    "https://containerone.net/blogs/news/how-much-does-a-shipping-container-cost-complete-2026-price-breakdown"
+   ],
+   "pickup": 1295,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Detroit/Chicago depots, stock varies",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "20-std-wwt",
+   "length": 20,
+   "height": "std",
+   "type": "dry",
+   "condition": "Used WWT",
+   "name": "20' standard",
+   "comp_low": 1280,
+   "comp_median": 1550,
+   "sources": [
+    "https://www.eveoncontainers.com/en-US/market-monitor",
+    "https://shipping-containers.com/shipping-container-price-index/",
+    "https://michiganstoragecontainers.com/product/20ft-containers-michigan"
+   ],
+   "pickup": 1795,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Core stock (Detroit/Chicago)",
+   "confidence": "High"
+  },
+  {
+   "sku": "20-std-cw",
+   "length": 20,
+   "height": "std",
+   "type": "dry",
+   "condition": "Cargo-worthy",
+   "name": "20' standard",
+   "comp_low": 1650,
+   "comp_median": 1745,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": 1895,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Detroit/Chicago depots",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "20-std-new",
+   "length": 20,
+   "height": "std",
+   "type": "dry",
+   "condition": "New / one-trip",
+   "name": "20' standard",
+   "comp_low": 1990,
+   "comp_median": 2300,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/",
+    "https://www.worthycontainer.com/20ft-new-one-trip-shipping-container-detroit-mi/"
+   ],
+   "pickup": 2595,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Detroit/Chicago depots",
+   "confidence": "High"
+  },
+  {
+   "sku": "20-hc-wwt",
+   "length": 20,
+   "height": "hc",
+   "type": "dry",
+   "condition": "Used WWT",
+   "name": "20' high cube",
+   "comp_low": 2100,
+   "comp_median": 2400,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "pickup": 2395,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Rare used; source on demand",
+   "confidence": "Low"
+  },
+  {
+   "sku": "20-hc-new",
+   "length": 20,
+   "height": "hc",
+   "type": "dry",
+   "condition": "New / one-trip",
+   "name": "20' high cube",
+   "comp_low": 3490,
+   "comp_median": 3900,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/",
+    "https://www.worthycontainer.com/20ft-new-one-trip-shipping-container-detroit-mi/"
+   ],
+   "pickup": 3595,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Detroit/Chicago depots",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "20-std-dd-new",
+   "length": 20,
+   "height": "std",
+   "type": "double_door",
+   "condition": "New / one-trip",
+   "name": "20' standard double door (tunnel)",
+   "comp_low": 3640,
+   "comp_median": 3950,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": 3795,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Order from depot, 1-2 wk",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "20-std-sd-new",
+   "length": 20,
+   "height": "std",
+   "type": "side_door",
+   "condition": "New / one-trip",
+   "name": "20' standard side door",
+   "comp_low": 4840,
+   "comp_median": 5750,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": 5295,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Special order",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "20-std-os-new",
+   "length": 20,
+   "height": "std",
+   "type": "open_side",
+   "condition": "New / one-trip",
+   "name": "20' standard full open side",
+   "comp_low": 5500,
+   "comp_median": 6900,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": 6495,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Special order",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "20-std-ot-used",
+   "length": 20,
+   "height": "std",
+   "type": "open_top",
+   "condition": "Used CW",
+   "name": "20' standard open top",
+   "comp_low": 3200,
+   "comp_median": 3900,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "pickup": 3695,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Special order",
+   "confidence": "Low"
+  },
+  {
+   "sku": "20-fr-used",
+   "length": 20,
+   "height": "std",
+   "type": "flat_rack",
+   "condition": "Used CW",
+   "name": "20' flat rack",
+   "comp_low": 2800,
+   "comp_median": 3400,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "pickup": 3195,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Special order; crane/forklift unload",
+   "confidence": "Low"
+  },
+  {
+   "sku": "20-reefer-work",
+   "length": 20,
+   "height": "std",
+   "type": "reefer",
+   "condition": "Used, working",
+   "name": "20' standard refrigerated",
+   "comp_low": 5000,
+   "comp_median": 7000,
+   "sources": [
+    "https://containerone.net/blogs/news/how-much-does-a-shipping-container-cost-complete-2026-price-breakdown",
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "pickup": 6995,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Special order; needs 460V 3-phase",
+   "confidence": "Low"
+  },
+  {
+   "sku": "20-reefer-nonwork",
+   "length": 20,
+   "height": "std",
+   "type": "insulated",
+   "condition": "Used, non-working (insulated box)",
+   "name": "20' standard insulated (ex-reefer)",
+   "comp_low": 3000,
+   "comp_median": 4250,
+   "sources": [
+    "https://containerone.net/blogs/news/how-much-does-a-shipping-container-cost-complete-2026-price-breakdown"
+   ],
+   "pickup": 3495,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Source on demand",
+   "confidence": "Low"
+  },
+  {
+   "sku": "20-reefer-new",
+   "length": 20,
+   "height": "std",
+   "type": "reefer",
+   "condition": "New",
+   "name": "20' standard refrigerated",
+   "comp_low": 24500,
+   "comp_median": 25648,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": null,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Call for quote",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "40-std-asis",
+   "length": 40,
+   "height": "std",
+   "type": "dry",
+   "condition": "As-is",
+   "name": "40' standard",
+   "comp_low": 1400,
+   "comp_median": 1600,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/",
+    "https://containerone.net/blogs/news/how-much-does-a-shipping-container-cost-complete-2026-price-breakdown"
+   ],
+   "pickup": 1595,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Depots, stock varies",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "40-std-wwt",
+   "length": 40,
+   "height": "std",
+   "type": "dry",
+   "condition": "Used WWT",
+   "name": "40' standard",
+   "comp_low": 1575,
+   "comp_median": 2039,
+   "sources": [
+    "https://www.eveoncontainers.com/en-US/market-monitor",
+    "https://shipping-containers.com/shipping-container-price-index/",
+    "https://michiganstoragecontainers.com/product/40ft-containers-michigan"
+   ],
+   "pickup": 2195,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Core stock (Detroit/Chicago)",
+   "confidence": "High"
+  },
+  {
+   "sku": "40-std-cw",
+   "length": 40,
+   "height": "std",
+   "type": "dry",
+   "condition": "Cargo-worthy",
+   "name": "40' standard",
+   "comp_low": 2000,
+   "comp_median": 2168,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": 2295,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Depots",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "40-std-new",
+   "length": 40,
+   "height": "std",
+   "type": "dry",
+   "condition": "New / one-trip",
+   "name": "40' standard",
+   "comp_low": 3500,
+   "comp_median": 4148,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": 3795,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Rare new standard-height",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "40-hc-wwt",
+   "length": 40,
+   "height": "hc",
+   "type": "dry",
+   "condition": "Used WWT",
+   "name": "40' high cube",
+   "comp_low": 1625,
+   "comp_median": 2063,
+   "sources": [
+    "https://www.eveoncontainers.com/en-US/market-monitor",
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": 2295,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Core stock (Detroit/Chicago)",
+   "confidence": "High"
+  },
+  {
+   "sku": "40-hc-cw",
+   "length": 40,
+   "height": "hc",
+   "type": "dry",
+   "condition": "Cargo-worthy",
+   "name": "40' high cube",
+   "comp_low": 2100,
+   "comp_median": 2215,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": 2395,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Depots",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "40-hc-new",
+   "length": 40,
+   "height": "hc",
+   "type": "dry",
+   "condition": "New / one-trip",
+   "name": "40' high cube",
+   "comp_low": 3190,
+   "comp_median": 3526,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/",
+    "https://www.worthycontainer.com/20ft-new-one-trip-shipping-container-detroit-mi/"
+   ],
+   "pickup": 3495,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Detroit/Chicago depots",
+   "confidence": "High"
+  },
+  {
+   "sku": "40-hc-dd-new",
+   "length": 40,
+   "height": "hc",
+   "type": "double_door",
+   "condition": "New / one-trip",
+   "name": "40' high cube double door (tunnel)",
+   "comp_low": 4285,
+   "comp_median": 5050,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": 4795,
+   "orderable": true,
+   "delivery_surcharge": 0,
+   "availability": "Order from depot, 1-2 wk",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "40-hc-sd-new",
+   "length": 40,
+   "height": "hc",
+   "type": "side_door",
+   "condition": "New / one-trip",
+   "name": "40' high cube side door",
+   "comp_low": 6911,
+   "comp_median": 8098,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": 7495,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Special order",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "40-hc-os-new",
+   "length": 40,
+   "height": "hc",
+   "type": "open_side",
+   "condition": "New / one-trip",
+   "name": "40' high cube full open side",
+   "comp_low": 12000,
+   "comp_median": 15999,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": null,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Call for quote",
+   "confidence": "Low"
+  },
+  {
+   "sku": "40-std-ot-used",
+   "length": 40,
+   "height": "std",
+   "type": "open_top",
+   "condition": "Used CW",
+   "name": "40' standard open top",
+   "comp_low": 3895,
+   "comp_median": 4800,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026",
+    "https://15651container.com/product/40ft-open-top-shipping-container-2/"
+   ],
+   "pickup": 4295,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Special order",
+   "confidence": "Low"
+  },
+  {
+   "sku": "40-fr-used",
+   "length": 40,
+   "height": "std",
+   "type": "flat_rack",
+   "condition": "Used CW",
+   "name": "40' flat rack",
+   "comp_low": 3495,
+   "comp_median": 4400,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026",
+    "https://containexco.com/product/40ft-used-flat-rack-shipping-container/",
+    "https://chs-containergroup.com/us/shop/shipping-containers/40ft-used-flat-rack-containers-for-sale/"
+   ],
+   "pickup": 3895,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Special order; crane/forklift unload",
+   "confidence": "Low"
+  },
+  {
+   "sku": "40-hc-reefer-work",
+   "length": 40,
+   "height": "hc",
+   "type": "reefer",
+   "condition": "Used, working",
+   "name": "40' high cube refrigerated",
+   "comp_low": 6500,
+   "comp_median": 9500,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/",
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "pickup": 8995,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Special order; needs 460V 3-phase",
+   "confidence": "Low"
+  },
+  {
+   "sku": "40-hc-reefer-nonwork",
+   "length": 40,
+   "height": "hc",
+   "type": "insulated",
+   "condition": "Used, non-working (insulated box)",
+   "name": "40' high cube insulated (ex-reefer)",
+   "comp_low": 3500,
+   "comp_median": 4500,
+   "sources": [
+    "https://containerone.net/blogs/news/how-much-does-a-shipping-container-cost-complete-2026-price-breakdown",
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "pickup": 3795,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Source on demand",
+   "confidence": "Low"
+  },
+  {
+   "sku": "40-reefer-new",
+   "length": 40,
+   "height": "hc",
+   "type": "reefer",
+   "condition": "New",
+   "name": "40' high cube refrigerated",
+   "comp_low": 24562,
+   "comp_median": 28250,
+   "sources": [
+    "https://shipping-containers.com/shipping-container-price-index/"
+   ],
+   "pickup": null,
+   "orderable": false,
+   "delivery_surcharge": 0,
+   "availability": "Call for quote",
+   "confidence": "Medium"
+  },
+  {
+   "sku": "45-hc-cw",
+   "length": 45,
+   "height": "hc",
+   "type": "dry",
+   "condition": "Cargo-worthy",
+   "name": "45' high cube",
+   "comp_low": 2900,
+   "comp_median": 3600,
+   "sources": [
+    "https://www.worthycontainer.com/53ft-high-cube-used-cargo-worthy-shipping-container-chicago-il/"
+   ],
+   "pickup": 3195,
+   "orderable": false,
+   "delivery_surcharge": 150,
+   "availability": "Chicago depots; long-truck delivery",
+   "confidence": "Low"
+  },
+  {
+   "sku": "45-hc-new",
+   "length": 45,
+   "height": "hc",
+   "type": "dry",
+   "condition": "New / one-trip",
+   "name": "45' high cube",
+   "comp_low": 7000,
+   "comp_median": 7900,
+   "sources": [
+    "https://www.worthycontainer.com/45ft-high-cube-new-one-trip-shipping-container-chicago-il/"
+   ],
+   "pickup": 7495,
+   "orderable": false,
+   "delivery_surcharge": 150,
+   "availability": "Special order",
+   "confidence": "Low"
+  },
+  {
+   "sku": "53-hc-used",
+   "length": 53,
+   "height": "hc",
+   "type": "dry",
+   "condition": "Used CW (domestic)",
+   "name": "53' high cube",
+   "comp_low": 3800,
+   "comp_median": 4900,
+   "sources": [
+    "https://www.worthycontainer.com/53ft-high-cube-used-cargo-worthy-shipping-container-chicago-il/"
+   ],
+   "pickup": 4595,
+   "orderable": false,
+   "delivery_surcharge": 300,
+   "availability": "Chicago rail yards; oversize delivery",
+   "confidence": "Low"
+  },
+  {
+   "sku": "53-hc-new",
+   "length": 53,
+   "height": "hc",
+   "type": "dry",
+   "condition": "New (domestic)",
+   "name": "53' high cube",
+   "comp_low": 14000,
+   "comp_median": 16000,
+   "sources": [
+    "https://www.worthycontainer.com/45ft-high-cube-new-one-trip-shipping-container-chicago-il/"
+   ],
+   "pickup": null,
+   "orderable": false,
+   "delivery_surcharge": 300,
+   "availability": "Call for quote",
+   "confidence": "Low"
+  }
+ ],
+ "addons": [
+  {
+   "sku": "lockbox",
+   "name": "Welded lock box",
+   "comp_low": 125,
+   "comp_median": 150,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "price": 145
+  },
+  {
+   "sku": "vents",
+   "name": "Extra vents (pair)",
+   "comp_low": 60,
+   "comp_median": 120,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "price": 95
+  },
+  {
+   "sku": "window",
+   "name": "Window w/ security bars",
+   "comp_low": 700,
+   "comp_median": 900,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "price": 795
+  },
+  {
+   "sku": "man-door",
+   "name": "36\" steel man door",
+   "comp_low": 1200,
+   "comp_median": 1600,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "price": 1395
+  },
+  {
+   "sku": "rollup",
+   "name": "Roll-up door 8'x7'",
+   "comp_low": 2500,
+   "comp_median": 3500,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "price": 2795
+  },
+  {
+   "sku": "paint",
+   "name": "Exterior paint, 1 color",
+   "comp_low": 1500,
+   "comp_median": 2250,
+   "sources": [
+    "https://amshippingcontainers.com/blog/how-much-does-a-shipping-container-cost-in-2026"
+   ],
+   "price": 1795
+  },
+  {
+   "sku": "shelving",
+   "name": "Interior shelving",
+   "comp_low": null,
+   "comp_median": null,
+   "sources": [],
+   "price": null
+  }
+ ]
+}

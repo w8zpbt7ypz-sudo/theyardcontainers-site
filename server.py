@@ -69,6 +69,29 @@ def quote_delivery(zipc):
             return {"zip": zipc, "miles": miles, "fee": int(round(base + max(0, miles - over) * per)) if per else base}
     return {"zip": zipc, "miles": miles, "fee": None}
 
+# ---- Full container catalog (catalog.json). Behind a review flag: nothing changes live until CATALOG_LIVE=1. ----
+CATALOG_LIVE = os.environ.get("CATALOG_LIVE", "0") == "1"
+with open(os.path.join(ROOT, "catalog.json")) as _f: CATALOG = json.load(_f)
+CAT = {i["sku"]: i for i in CATALOG["items"]}
+LEGACY = CATALOG["legacy_sizes"]          # "20" -> "20-std-wwt", "40" -> "40-std-wwt"
+def catalog_item(size, live=None):
+    """Resolve a size/SKU to {'sku','name','pickup','surcharge'} or None if not orderable online."""
+    live = CATALOG_LIVE if live is None else live
+    size = str(size or "").strip().rstrip("'").replace("ft", "").strip().lower()
+    if not live:
+        if size in ("20", "40"): return {"sku": size, "name": f"{size}' standard (used WWT)", "pickup": PRICES["buy"][size]["pickup"], "surcharge": 0}
+        return None
+    sku = LEGACY.get(size, size); i = CAT.get(sku)
+    if not i or not i["orderable"] or not i["pickup"]: return None
+    return {"sku": sku, "name": f"{i['name']} – {i['condition']}", "pickup": i["pickup"], "surcharge": i["delivery_surcharge"]}
+def size_label(size):
+    i = CAT.get(str(size)); return f"{i['name']} ({i['condition']})" if i else f"{size}'"
+def catalog_delivered(fee, live=None):
+    live = CATALOG_LIVE if live is None else live
+    if fee is None: return {}
+    if not live: return {}
+    return {i["sku"]: i["pickup"] + fee + i["delivery_surcharge"] for i in CATALOG["items"] if i["orderable"] and i["pickup"]}
+
 LABEL = {"buy": "Buy", "rent": "Storage rental", "lease": "Job-site lease", "rto": "Rent-to-own"}
 # Feature flag: which products are offered. Sales only for now; rental code stays intact.
 # Re-enable later with e.g. ENABLED_PRODUCTS=buy,rent (future: on-site storage at the Comstock yard).
@@ -116,7 +139,9 @@ def init_db():
 def price_order(product, size, mode, fee):
     """fee = ZIP delivery fee (0 for pickup). Returns (one_time, monthly)."""
     if product == "buy":
-        return PRICES["buy"][size]["pickup"] + (fee if mode == "delivered" else 0), 0
+        it = catalog_item(size)
+        if not it: raise ValueError("That container isn't available online - call (855) 768-YARD for a quote")
+        return it["pickup"] + ((fee + it["surcharge"]) if mode == "delivered" else 0), 0
     return fee, PRICES[product][size]["monthly"]
 
 def truthy(v):
@@ -127,7 +152,10 @@ def create_order(d):
     """Returns order id, or raises ValueError (unknown ZIP / call for quote)."""
     product, size = d.get("product", ""), d.get("size", "")
     if product_error(product): raise ValueError(product_error(product))
-    if size not in ("20", "40"): raise ValueError("Size must be 20 or 40")
+    if product == "buy":
+        if not catalog_item(size): raise ValueError("That container isn't available online - call (855) 768-YARD for a quote" if CATALOG_LIVE else "Size must be 20 or 40")
+        size = catalog_item(size)["sku"]
+    elif size not in ("20", "40"): raise ValueError("Size must be 20 or 40")
     mode = d.get("mode") if product == "buy" else "delivered"
     mode = mode or "delivered"
     q = {"zip": d.get("zip",""), "miles": None, "fee": 0}
@@ -159,7 +187,7 @@ def mark_paid(oid, session=None):
     c = db(); o = c.execute("select * from orders where id=?", (oid,)).fetchone()
     if not o or o["status"] == "paid": c.close(); return
     status = {"buy": "sold", "rent": "rented", "lease": "leased", "rto": "rented"}[o["product"]]
-    box = c.execute("select id from containers where size=? and status='available' order by id limit 1", (o["size"],)).fetchone()
+    box = c.execute("select id from containers where size=? and status='available' order by id limit 1", ({v: k for k, v in LEGACY.items()}.get(o["size"], o["size"]),)).fetchone()
     cid = box["id"] if box else None
     if cid: c.execute("update containers set status=?, order_id=? where id=?", (status, oid, cid))
     drv, date = assign_driver(c, o["date"])
@@ -171,7 +199,7 @@ def mark_paid(oid, session=None):
 
 # ---------------- Stripe (REST via urllib; only used if STRIPE_SECRET_KEY set) ----------------
 def stripe_checkout(o):
-    name = f"{LABEL[o['product']]} – {o['size']}' container"
+    name = f"{LABEL[o['product']]} – {size_label(o['size'])} container"
     form = [("mode", "subscription" if o["monthly"] else "payment"),
             ("success_url", f"{BASE_URL}/success/{o['id']}"), ("cancel_url", f"{BASE_URL}/pay/{o['id']}"),
             ("client_reference_id", o["id"]), ("metadata[order_id]", o["id"]), ("customer_email", o["email"] or "")]
@@ -214,7 +242,10 @@ def voice_order(d):
     d = {k: str(d.get(k) or "").strip() for k in VOICE_FIELDS}; d["sms_opt_in"] = opt
     d["size"] = d["size"].rstrip("'").replace("ft", "").strip()
     d["product"] = d["product"].lower(); d["mode"] = (d["mode"] or "delivered").lower()
-    if d["size"] not in ("20", "40"): return 400, {"error": "size must be 20 or 40"}
+    d["size"] = d["size"].lower()
+    if d["product"] in ("buy", "") and not catalog_item(d["size"]):
+        return 400, {"error": "size must be 20 or 40" if not CATALOG_LIVE else "not orderable online - take details for a quote", "code": "call_for_quote" if CATALOG_LIVE else "bad_size"}
+    if d["product"] not in ("buy", "") and d["size"] not in ("20", "40"): return 400, {"error": "size must be 20 or 40"}
     if d["product"] not in LABEL: return 400, {"error": "product must be one of: " + ", ".join(ENABLED)}
     if product_error(d["product"]): return 400, {"error": "product_not_offered", "message": NOT_OFFERED, "enabled_products": ENABLED}
     if d["mode"] not in ("delivered", "pickup"): return 400, {"error": "mode must be delivered or pickup"}
@@ -232,7 +263,7 @@ def voice_order(d):
     c = db(); o = c.execute("select * from orders where id=?", (oid,)).fetchone(); c.close()
     totals = {"one_time": o["one_time"], "monthly": o["monthly"], "delivery_fee": o["delivery_fee"], "miles": o["miles"]}
     pay_url = f"{BASE_URL}/pay/{oid}"
-    alert = (f"NEW PHONE ORDER {oid} (unpaid): {LABEL[o['product']]} {o['size']}' container, {o['mode']}, {o['date']} -> {o['address'] or '-'} "
+    alert = (f"NEW PHONE ORDER {oid} (unpaid): {LABEL[o['product']]} {size_label(o['size'])} container, {o['mode']}, {o['date']} -> {o['address'] or '-'} "
              f"(ZIP {o['zip'] or '-'}). Customer {o['name']} {o['phone']} {o['email'] or '-'}. Due now ${o['one_time']}"
              + (f", then ${o['monthly']}/mo" if o["monthly"] else "") + f". Text updates: {'YES (opted in)' if o['sms_opt_in'] else 'no'}. Notes: {o['notes']}. Pay link: {pay_url}  Admin: {BASE_URL}/admin")
     def _alert():
@@ -245,7 +276,7 @@ def voice_order(d):
 
 def notify_paid(c, o):
     d = driver_info(c, o["driver"]); when = o["date"]
-    what = f"{LABEL[o['product']]} {o['size']}' container"
+    what = f"{LABEL[o['product']]} {size_label(o['size'])} container"
     cust = (f"The Yard Containers: order {o['id']} is paid. Your {what} is scheduled for {when}"
             + (f" to {o['address']}." if o["mode"] == "delivered" else " for pickup at our yard (5672 E Michigan Ave, Comstock).")
             + " Questions? Reply or call (855) 768-YARD.")
@@ -267,7 +298,7 @@ def send_reminders(today=None, force=False):
     for o in c.execute("select * from orders where status='paid' and date=?", (tomorrow,)).fetchall():
         if c.execute("select 1 from outbox where kind like 'reminder%' and order_id=?", (o["id"],)).fetchone(): continue
         d = driver_info(c, o["driver"])
-        msg = f"Reminder from The Yard Containers: your {LABEL[o['product']]} {o['size']}' container ({o['id']}) is scheduled for tomorrow, {o['date']}. Please make sure the site is clear and accessible."
+        msg = f"Reminder from The Yard Containers: your {LABEL[o['product']]} {size_label(o['size'])} container ({o['id']}) is scheduled for tomorrow, {o['date']}. Please make sure the site is clear and accessible."
         notify.send(c, "email", o["email"], f"Tomorrow: order {o['id']}", msg, "reminder_customer", o["id"])
         notify.send(c, "sms", o["phone"], "", msg + " Reply STOP to opt out.", "reminder_customer", o["id"], sms_ok=bool(o["sms_opt_in"]))
         jm = f"Reminder: job {o['id']} tomorrow {o['date']} -> {o['address']}. Work order: {BASE_URL}/driver/po/{o['id']}"
@@ -437,6 +468,27 @@ def page(title, body, sub=""):
 
 def esc(x): return html.escape(str(x if x is not None else ""))
 
+def size_options(sel):
+    if not CATALOG_LIVE:
+        return "".join(f"<option value={z} {'selected' if z==sel else ''}>{z}' standard</option>" for z in ("20", "40"))
+    sel = LEGACY.get(sel, sel)
+    return "".join(f"<option value={i['sku']} {'selected' if i['sku']==sel else ''}>{esc(i['name'])} – {esc(i['condition'])} · ${i['pickup']:,}</option>"
+                   for i in CATALOG["items"] if i["orderable"] and i["pickup"])
+
+def catalog_page():
+    f = lambda v: f"${v:,}" if v else "Call"
+    near = DELIVERY_BANDS[0][1]
+    rows = "".join(f"<tr><td>{esc(i['name'])}</td><td>{esc(i['condition'])}</td><td>{f(i['pickup'])}</td><td>{f(i['pickup'] and i['pickup']+near+i['delivery_surcharge'])}</td>"
+                   f"<td>{'Order online' if i['orderable'] else 'Call for quote'}</td><td class=sub>{esc(i['availability'])}</td>"
+                   f"<td class=sub>{f(i['comp_low'])} / {f(i['comp_median'])}</td><td>{esc(i['confidence'])}</td>"
+                   f"<td>{'<a href=/checkout?product=buy&size='+i['sku']+'>checkout</a>' if i['orderable'] and i['pickup'] else ''}</td></tr>" for i in CATALOG["items"])
+    adds = "".join(f"<tr><td>{esc(a['name'])}</td><td>{f(a['price'])}</td></tr>" for a in CATALOG["addons"])
+    state = "LIVE" if CATALOG_LIVE else "PREVIEW ONLY — not live (CATALOG_LIVE=0)"
+    return page("Catalog preview", f"""<div class=eyebrow>{state} · {esc(CATALOG['version'])}</div><h2>Full container catalog</h2>
+<p class=sub>Delivered-from = pickup + ${near} nearest delivery band + length surcharge (45' +${CATALOG['length_surcharge']['45']}, 53' +${CATALOG['length_surcharge']['53']}). Competitor columns are internal (low / median).</p>
+<table class=t><tr><th>Container</th><th>Condition</th><th>Pickup</th><th>Delivered from</th><th>Online</th><th>Availability</th><th>Comp low / median</th><th>Conf.</th><th></th></tr>{rows}</table>
+<h3 style="margin-top:32px">Add-ons</h3><table class=t>{adds}</table>""")
+
 def checkout_form(q):
     product = q.get("product", ["buy"])[0]; size = q.get("size", ["20"])[0]
     if product not in ENABLED: product = ENABLED[0]
@@ -444,7 +496,7 @@ def checkout_form(q):
     return page("Checkout", f"""<div class=eyebrow>Checkout</div><h2>Order a container</h2><p class=sub>{esc(price_sheet())}</p>
 <form method=post action="/order" class=form>
 <div><label>Product</label><select name=product>{opts}</select></div>
-<div><label>Size</label><select name=size><option {'selected' if size=='20' else ''}>20</option><option {'selected' if size=='40' else ''}>40</option></select></div>
+<div><label>Container</label><select name=size>{size_options(size)}</select></div>
 <div><label>{'Buy only: delivery' if RENTALS_ON else 'Delivery or pickup'}</label><select name=mode><option value=delivered>Delivered (fee by ZIP)</option><option value=pickup>Yard pickup</option></select></div>
 <div><label>Delivery ZIP</label><input name=zip id=zip maxlength=5 oninput="zq(this.value)"><div id=zres class=sub></div></div>
 <div><label>Date</label><input name=date type=date required></div>
@@ -460,8 +512,8 @@ const b=document.querySelector('form.form button');const m=document.querySelecto
 def pay_page(o):
     one, mon = o["one_time"], o["monthly"]
     dl = f"ZIP {o['zip']}, ~{o['miles']} road mi" if o['zip'] else "yard pickup"
-    lines = (f"<li>{LABEL[o['product']]} {o['size']}' ({o['mode']}) — box ${one-(o['delivery_fee'] or 0):,}</li><li>Delivery ({esc(dl)}) ${o['delivery_fee'] or 0}</li><li>Total <b>${one:,}</b></li>" if not mon else
-             f"<li>{LABEL[o['product']]} {o['size']}' — <b>${mon}/month</b> (subscription)</li><li>Delivery fee ({esc(dl)}) <b>${one}</b> (one-time)</li>")
+    lines = (f"<li>{LABEL[o['product']]} {size_label(o['size'])} ({o['mode']}) — box ${one-(o['delivery_fee'] or 0):,}</li><li>Delivery ({esc(dl)}) ${o['delivery_fee'] or 0}</li><li>Total <b>${one:,}</b></li>" if not mon else
+             f"<li>{LABEL[o['product']]} {size_label(o['size'])} — <b>${mon}/month</b> (subscription)</li><li>Delivery fee ({esc(dl)}) <b>${one}</b> (one-time)</li>")
     btn = ("<form method=post action='/demo/pay/%s'><button class='btn p'>Simulate successful payment (demo)</button></form>" % o["id"]) if DEMO else \
           ("<form method=post action='/stripe/session/%s'><button class='btn p'>Pay with Stripe</button></form>" % o["id"])
     return page("Pay", f"""<div class=eyebrow>Order {esc(o['id'])}</div><h2>Review &amp; pay</h2>
@@ -473,7 +525,7 @@ def po_html(o):
     if o["product"] in ("rent", "lease", "rto"): fees += f"<tr><td>Swap / pickup fee (as needed)</td><td>${o['delivery_fee']} each (same band)</td></tr>"
     return page(f"Work Order {o['id']}", f"""<div class=eyebrow>Work order / PO</div><h2>{esc(o['id'])}</h2>
 <table class=t><tr><td>Created</td><td>{esc(o['created'])}</td></tr><tr><td>Customer</td><td>{esc(o['name'])} · {esc(o['phone'])} · {esc(o['email'])} · texts: {'opted in' if o['sms_opt_in'] else 'no'}</td></tr>
-<tr><td>Service</td><td>{LABEL[o['product']]} — {o['size']}' ({esc(o['mode'])})</td></tr><tr><td>Container</td><td>{esc(o['container_id'])}</td></tr>
+<tr><td>Service</td><td>{LABEL[o['product']]} — {size_label(o['size'])} ({esc(o['mode'])})</td></tr><tr><td>Container</td><td>{esc(o['container_id'])}</td></tr>
 <tr><td>Deliver to</td><td>{esc(o['address'])}</td></tr><tr><td>Scheduled</td><td>{esc(o['date'])}</td></tr>
 <tr><td>Assigned</td><td>Driver {o['driver']} · Truck {o['driver']}</td></tr><tr><td>Site notes</td><td>{esc(o['notes']) or '—'}</td></tr>
 <tr><td>Charges</td><td>{'$%s one-time' % format(o['one_time'],',') if not o['monthly'] else '$%s/mo + $%s delivery' % (o['monthly'], o['one_time'])}</td></tr>{fees}
@@ -486,12 +538,12 @@ def admin_page():
     dates = sorted({o["date"] for o in orders if o["status"] == "paid"})
     board = "<table class=t><tr><th>Date</th>" + "".join(f"<th>Driver {i} / Truck {i}</th>" for i in (1,2,3)) + "</tr>"
     for dt in dates:
-        board += f"<tr><td>{dt}</td>" + "".join("<td>" + "<br>".join(f"<a href='/po/{o['id']}'>{o['id']}</a> {LABEL[o['product']]} {o['size']}' · {esc(o['address'])}" for o in orders if o["date"]==dt and o["driver"]==i and o["status"]=="paid") + "</td>" for i in (1,2,3)) + "</tr>"
+        board += f"<tr><td>{dt}</td>" + "".join("<td>" + "<br>".join(f"<a href='/po/{o['id']}'>{o['id']}</a> {LABEL[o['product']]} {size_label(o['size'])} · {esc(o['address'])}" for o in orders if o["date"]==dt and o["driver"]==i and o["status"]=="paid") + "</td>" for i in (1,2,3)) + "</tr>"
     board += "</table>"
     ol = "<table class=t><tr><th>Order</th><th>Customer</th><th>Product</th><th>Status</th><th>Texts</th><th>Box</th><th>Driver</th><th>PO</th></tr>" + "".join(
-        f"<tr><td>{o['id']}</td><td>{esc(o['name'])}</td><td>{LABEL[o['product']]} {o['size']}'</td><td>{o['status']}</td><td>{'✔ opted in' if o['sms_opt_in'] else '—'}</td><td>{esc(o['container_id'] or '')}</td><td>{o['driver'] or ''}</td><td>{'<a href=/po/'+o['id']+'>PO</a>' if o['status']=='paid' else '<a href=/pay/'+o['id']+'>pay link</a>'}</td></tr>" for o in orders) + "</table>"
+        f"<tr><td>{o['id']}</td><td>{esc(o['name'])}</td><td>{LABEL[o['product']]} {size_label(o['size'])}</td><td>{o['status']}</td><td>{'✔ opted in' if o['sms_opt_in'] else '—'}</td><td>{esc(o['container_id'] or '')}</td><td>{o['driver'] or ''}</td><td>{'<a href=/po/'+o['id']+'>PO</a>' if o['status']=='paid' else '<a href=/pay/'+o['id']+'>pay link</a>'}</td></tr>" for o in orders) + "</table>"
     inv = "<table class=t><tr><th>ID</th><th>Size</th><th>Status</th><th>Order</th></tr>" + "".join(
-        f"<tr><td>{b['id']}</td><td>{b['size']}'</td><td><span class='pill {b['status']}'>{b['status']}</span></td><td>{esc(b['order_id'] or '')}</td></tr>" for b in boxes) + "</table>"
+        f"<tr><td>{b['id']}</td><td>{size_label(b['size'])}</td><td><span class='pill {b['status']}'>{b['status']}</span></td><td>{esc(b['order_id'] or '')}</td></tr>" for b in boxes) + "</table>"
     return page("Admin", f"""<div class=eyebrow>Back office</div><h2>Dispatch board</h2>{board}
 <p class=sub><a href=/admin/outbox>Notification outbox</a> · <a href=/admin/settings>Driver settings &amp; PINs</a></p>
 <p class=sub>Driver views (admin): <a href=/admin/driver/1>Driver 1</a> · <a href=/admin/driver/2>Driver 2</a> · <a href=/admin/driver/3>Driver 3</a></p>
@@ -499,7 +551,7 @@ def admin_page():
 
 def driver_page(n, po_prefix='/po/'):
     c = db(); name = setting(c, f'driver{n}_name', f'Driver {n}'); jobs = c.execute("select * from orders where driver=? and status='paid' order by date", (n,)).fetchall(); c.close()
-    rows = "".join(f"<div class=card style='margin-bottom:16px'><div class=step>{o['date']}</div><h3>{LABEL[o['product']]} — {o['size']}' · {esc(o['container_id'])}</h3><p>{esc(o['address'])}</p><p class=sub>{esc(o['name'])} · {esc(o['phone'])} · Notes: {esc(o['notes']) or '—'}</p><a class=btn href='{po_prefix}{o['id']}'>Work order</a></div>" for o in jobs) or "<p class=sub>No jobs assigned.</p>"
+    rows = "".join(f"<div class=card style='margin-bottom:16px'><div class=step>{o['date']}</div><h3>{LABEL[o['product']]} — {size_label(o['size'])} · {esc(o['container_id'])}</h3><p>{esc(o['address'])}</p><p class=sub>{esc(o['name'])} · {esc(o['phone'])} · Notes: {esc(o['notes']) or '—'}</p><a class=btn href='{po_prefix}{o['id']}'>Work order</a></div>" for o in jobs) or "<p class=sub>No jobs assigned.</p>"
     return page(f"Driver {n}", f"<div class=eyebrow>{esc(name)} · Truck {n}</div><h2>My jobs</h2>{rows}", "<a href='/driver/logout'>Sign out</a>" if po_prefix != '/po/' else "<a href='/admin'>Admin</a>")
 
 def home():
@@ -548,6 +600,10 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path); p = u.path; q = urllib.parse.parse_qs(u.query)
         if p == "/": return self.send(200, home())
         if p == "/checkout": return self.send(200, checkout_form(q))
+        if p == "/preview/catalog":
+            if not self.authed(): return
+            return self.send(200, catalog_page(), headers={"X-Robots-Tag": "noindex"})
+        if p == "/api/catalog": return self.send(200, json.dumps({"live": CATALOG_LIVE, "items": [i for i in CATALOG["items"]] if CATALOG_LIVE else []}), "application/json")
         if p.startswith("/pay/"):
             o = self.order(p[5:]); return self.send(200, pay_page(o)) if o else self.send(404, "not found")
         if p.startswith("/success/"):
@@ -558,7 +614,8 @@ class H(BaseHTTPRequestHandler):
             if q2.get("miles") is not None: q2["call_for_quote"] = q2.get("fee") is None
             if q2.get("call_for_quote"): q2["message"] = "Over 100 road miles — call for a quote at (855) 768-YARD (855-768-9273). Online payment isn't available for this ZIP."
             if q2.get("fee") is not None:
-                q2["buy_delivered"] = {sz: PRICES["buy"][sz]["pickup"] + q2["fee"] for sz in ("20", "40")}
+                q2["buy_delivered"] = {sz: catalog_item(sz)["pickup"] + q2["fee"] for sz in ("20", "40")}
+                if CATALOG_LIVE: q2["catalog_delivered"] = catalog_delivered(q2["fee"])
             return self.send(200, json.dumps(q2), "application/json")
         if p in ("/healthz", "/health"):
             try: c = db(); c.execute("select 1"); c.close(); ok = True
@@ -627,7 +684,8 @@ class H(BaseHTTPRequestHandler):
             q2 = quote_delivery(str(d.get("zip", "")).strip()[:5])
             if q2.get("miles") is not None: q2["call_for_quote"] = q2.get("fee") is None
             if q2.get("fee") is not None:
-                q2["buy_delivered"] = {sz: PRICES["buy"][sz]["pickup"] + q2["fee"] for sz in ("20", "40")}
+                q2["buy_delivered"] = {sz: catalog_item(sz)["pickup"] + q2["fee"] for sz in ("20", "40")}
+                if CATALOG_LIVE: q2["catalog_delivered"] = catalog_delivered(q2["fee"])
             return self.send(200, json.dumps(q2), "application/json")
         if p == "/api/voice/order":
             jh = {"Cache-Control": "no-store"}
