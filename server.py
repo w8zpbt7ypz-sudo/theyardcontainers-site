@@ -11,6 +11,7 @@ BASE_URL = os.environ.get("BASE_URL", f"http://localhost:{PORT}")
 CANONICAL_URL = os.environ.get("CANONICAL_URL", "https://theyardcontainers.com")  # public site domain
 STRIPE_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WHSEC = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_API_BASE = os.environ.get("STRIPE_API_BASE", "https://api.stripe.com")   # override only in tests
 LLM_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
 LLM_BASE = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 LLM_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
@@ -191,25 +192,36 @@ def assign_driver(c, date):
     return 1, d.isoformat()
 
 def mark_paid(oid, session=None):
-    c = db(); o = c.execute("select * from orders where id=?", (oid,)).fetchone()
-    if not o or o["status"] == "paid": c.close(); return
-    status = {"buy": "sold", "rent": "rented", "lease": "leased", "rto": "rented"}[o["product"]]
-    box = c.execute("select id from containers where size=? and status='available' order by id limit 1", ({v: k for k, v in LEGACY.items()}.get(o["size"], o["size"]),)).fetchone()
-    cid = box["id"] if box else None
-    if cid: c.execute("update containers set status=?, order_id=? where id=?", (status, oid, cid))
-    drv, date = assign_driver(c, o["date"])
-    c.execute("update orders set status='paid', stripe_session=coalesce(?,stripe_session), container_id=?, driver=?, date=? where id=?",
-              (session, cid or "BACKORDER (source new box)", drv, date, oid))
-    o = c.execute("select * from orders where id=?", (oid,)).fetchone()
-    notify_paid(c, o)
-    c.commit(); c.close()
+    """Mark an order paid and send the paid-order emails/SMS. Idempotent and race-safe: the first caller to flip
+    status to 'paid' (atomic UPDATE ... WHERE status != 'paid') does the work; duplicates return False and send nothing."""
+    c = db()
+    try:
+        cur = c.execute("update orders set status='paid', stripe_session=coalesce(?,stripe_session) where id=? and status!='paid'", (session, oid))
+        if cur.rowcount != 1: c.rollback(); return False       # unknown order, or already paid (duplicate webhook / demo click)
+        o = c.execute("select * from orders where id=?", (oid,)).fetchone()
+        status = {"buy": "sold", "rent": "rented", "lease": "leased", "rto": "rented"}[o["product"]]
+        box = c.execute("select id from containers where size=? and status='available' order by id limit 1", ({v: k for k, v in LEGACY.items()}.get(o["size"], o["size"]),)).fetchone()
+        cid = box["id"] if box else None
+        if cid: c.execute("update containers set status=?, order_id=? where id=?", (status, oid, cid))
+        drv, date = assign_driver(c, o["date"])
+        c.execute("update orders set container_id=?, driver=?, date=? where id=?", (cid or "BACKORDER (source new box)", drv, date, oid))
+        o = c.execute("select * from orders where id=?", (oid,)).fetchone()
+        notify_paid(c, o)
+        c.commit(); return True
+    except Exception:
+        c.rollback(); raise
+    finally:
+        c.close()
 
 # ---------------- Stripe (REST via urllib; only used if STRIPE_SECRET_KEY set) ----------------
 def stripe_checkout(o):
     name = f"{LABEL[o['product']]} – {size_label(o['size'])} container"
     form = [("mode", "subscription" if o["monthly"] else "payment"),
             ("success_url", f"{BASE_URL}/success/{o['id']}"), ("cancel_url", f"{BASE_URL}/pay/{o['id']}"),
-            ("client_reference_id", o["id"]), ("metadata[order_id]", o["id"]), ("customer_email", o["email"] or "")]
+            ("client_reference_id", o["id"]), ("metadata[order_id]", o["id"])]
+    if "@" in (o["email"] or ""): form.append(("customer_email", o["email"]))
+    if not o["monthly"]:   # one-time sale: carry the order id onto the PaymentIntent too (easier refunds/reconciliation)
+        form += [("payment_intent_data[metadata][order_id]", o["id"]), ("payment_intent_data[description]", f"The Yard Containers order {o['id']}")]
     i = 0
     if o["monthly"]:
         form += [(f"line_items[{i}][price_data][currency]", "usd"), (f"line_items[{i}][price_data][product_data][name]", name + " (monthly)"),
@@ -220,17 +232,16 @@ def stripe_checkout(o):
         form += [(f"line_items[{i}][price_data][currency]", "usd"),
                  (f"line_items[{i}][price_data][product_data][name]", name if not o["monthly"] else "Delivery fee"),
                  (f"line_items[{i}][price_data][unit_amount]", str(o["one_time"]*100)), (f"line_items[{i}][quantity]", "1")]
-    req = urllib.request.Request("https://api.stripe.com/v1/checkout/sessions", data=urllib.parse.urlencode(form).encode(),
+    req = urllib.request.Request(STRIPE_API_BASE + "/v1/checkout/sessions", data=urllib.parse.urlencode(form).encode(),
         headers={"Authorization": "Bearer " + STRIPE_KEY})
     return json.load(urllib.request.urlopen(req, timeout=20))
 
 def verify_stripe_sig(payload, header):
-    if not STRIPE_WHSEC: return not PRODUCTION   # unsigned events only accepted outside production
-    if not header: return False
-    parts = dict(p.split("=", 1) for p in header.split(",") if "=" in p)
-    signed = f"{parts.get('t')}.{payload.decode()}".encode()
+    if not STRIPE_WHSEC or not header: return False   # never accept unsigned events (anyone could mark orders paid)
+    parts = dict(p.strip().split("=", 1) for p in header.split(",") if "=" in p)
+    signed = f"{parts.get('t')}.".encode() + payload
     exp = hmac.new(STRIPE_WHSEC.encode(), signed, hashlib.sha256).hexdigest()
-    sigs = [p.split("=", 1)[1] for p in header.split(",") if p.startswith("v1=")]
+    sigs = [p.strip().split("=", 1)[1] for p in header.split(",") if p.strip().startswith("v1=")]
     try: ts_ok = abs(time.time() - int(parts.get("t", 0))) < 300
     except ValueError: return False
     return ts_ok and any(hmac.compare_digest(exp, s) for s in sigs)
@@ -614,7 +625,10 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/pay/"):
             o = self.order(p[5:]); return self.send(200, pay_page(o)) if o else self.send(404, "not found")
         if p.startswith("/success/"):
-            o = self.order(p[9:]); return self.send(200, page("Thanks", f"<h2>Thank you!</h2><p>Order {esc(o['id'])} is <b>{o['status']}</b>. Scheduled {o['date']} with Driver {o['driver'] or 'TBD'}.</p>"))
+            o = self.order(p[9:])
+            if not o: return self.send(404, "not found")
+            if o["status"] != "paid": return self.send(200, page("Thanks", f"<h2>Thank you!</h2><p>Order {esc(o['id'])}: we're confirming your payment now. This usually takes a few seconds; refresh this page, and you'll also get a confirmation email.</p>"))
+            return self.send(200, page("Thanks", f"<h2>Thank you!</h2><p>Order {esc(o['id'])} is <b>{o['status']}</b>. Scheduled {o['date']} with Driver {o['driver'] or 'TBD'}.</p>"))
         if p == "/api/prices": return self.send(200, json.dumps({"prices": PRICES, "bands": DELIVERY_BANDS}), "application/json")
         if p == "/api/delivery":
             q2 = quote_delivery(q.get("zip", [""])[0]); size = q.get("size", [None])[0]
@@ -627,7 +641,8 @@ class H(BaseHTTPRequestHandler):
         if p in ("/healthz", "/health"):
             try: c = db(); c.execute("select 1"); c.close(); ok = True
             except Exception: ok = False
-            return self.send(200 if ok else 503, json.dumps({"ok": ok, "payments": "demo" if DEMO else "stripe", "production": PRODUCTION,
+            return self.send(200 if ok else 503, json.dumps({"ok": ok, "payments": "demo" if DEMO else "live", "stripe_mode": None if DEMO else ("test" if STRIPE_KEY.startswith(("sk_test_", "rk_test_")) else "live"),
+                "stripe_webhook_secret": bool(STRIPE_WHSEC), "production": PRODUCTION,
                 "sms": notify.sms_enabled(), "email": notify.email_enabled()}), "application/json")
         if p == "/cron/reminders":
             if not CRON_TOKEN or q.get("token", [""])[0] != CRON_TOKEN: return self.send(403, "forbidden")
@@ -716,17 +731,38 @@ class H(BaseHTTPRequestHandler):
             if not DEMO: return self.send(403, "Demo payments disabled when STRIPE_SECRET_KEY is set")
             oid = p[10:]; mark_paid(oid, "demo_" + uuid.uuid4().hex[:8]); return self.redirect("/success/" + oid)
         if p.startswith("/stripe/session/"):
-            o = self.order(p[16:]); s = stripe_checkout(o)
-            c = db(); c.execute("update orders set stripe_session=? where id=?", (s["id"], o["id"])); c.commit(); c.close()
-            return self.redirect(s["url"])
-        if p == "/webhook/stripe":
+            if DEMO: return self.send(403, "Stripe is not configured")
+            o = self.order(p[16:])
+            if not o: return self.send(404, "not found")
+            if o["status"] == "paid": return self.redirect("/success/" + o["id"])
+            try:
+                s = stripe_checkout(o)
+                c = db(); c.execute("update orders set stripe_session=? where id=? and status!='paid'", (s["id"], o["id"])); c.commit(); c.close()
+                return self.redirect(s["url"])
+            except Exception as e:
+                logging.error("Stripe checkout session failed for %s: %s", o["id"], e)
+                return self.send(502, page("Payment unavailable", f"<div class=eyebrow>Order {esc(o['id'])}</div><h2>We couldn't start the payment page.</h2><p>Nothing was charged. Please <a href='/pay/{esc(o['id'])}'>try again</a> or call {PHONE_DISPLAY}.</p>"))
+        if p in ("/stripe/webhook", "/webhook/stripe"):
             if not verify_stripe_sig(raw, self.headers.get("Stripe-Signature", "")):
                 logging.warning("rejected Stripe webhook (bad/missing signature)"); return self.send(400, "bad signature")
-            ev = json.loads(raw)
-            if ev.get("type") in ("checkout.session.completed", "invoice.paid"):
-                obj = ev["data"]["object"]; oid = (obj.get("metadata") or {}).get("order_id") or obj.get("client_reference_id") \
+            try: ev = json.loads(raw); typ = ev.get("type"); obj = ev["data"]["object"]
+            except (ValueError, KeyError, TypeError): return self.send(400, "bad event")
+            if typ in ("checkout.session.completed", "checkout.session.async_payment_succeeded", "invoice.paid"):
+                oid = (obj.get("metadata") or {}).get("order_id") or obj.get("client_reference_id") \
                       or ((obj.get("subscription_details") or {}).get("metadata") or {}).get("order_id")
-                if oid: mark_paid(oid, obj.get("id"))
+                ok = True
+                if typ.startswith("checkout.session") and obj.get("payment_status") not in ("paid", "no_payment_required"):
+                    ok = False; logging.info("Stripe %s for %s not paid yet (%s); waiting", typ, oid, obj.get("payment_status"))
+                if ok and oid:
+                    o = self.order(oid)
+                    if not o: logging.warning("Stripe event for unknown order %s", oid)
+                    elif typ.startswith("checkout.session") and (obj.get("amount_total") or 0) < (o["one_time"] + o["monthly"]) * 100:
+                        logging.error("Stripe amount %s < order %s total %s: NOT marking paid", obj.get("amount_total"), oid, (o["one_time"] + o["monthly"]) * 100)
+                    else:
+                        try:
+                            if mark_paid(oid, obj.get("id") if typ.startswith("checkout.session") else None): logging.info("order %s marked paid via Stripe", oid)
+                        except Exception:
+                            logging.exception("mark_paid failed for %s", oid); return self.send(500, "error")   # Stripe will retry
             return self.send(200, '{"received":true}', "application/json")
         self.send(404, "not found")
     def log_message(self, *a): pass

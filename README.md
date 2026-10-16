@@ -18,7 +18,7 @@ python3 server.py    # http://localhost:8000
 | Admin back office | `/admin` | Basic auth: any username, password `ADMIN_PASSWORD` |
 | Work order / PO | `/po/<order id>` | |
 | Driver view | `/driver/1..3` | |
-| Stripe webhook | `POST /webhook/stripe` | |
+| Stripe webhook | `POST /stripe/webhook` (alias `/webhook/stripe`) | |
 
 Delete `yards.db` to reset all data.
 
@@ -26,7 +26,7 @@ Delete `yards.db` to reset all data.
 | Var | Purpose | Default |
 |---|---|---|
 | `STRIPE_SECRET_KEY` | Turns on real Stripe Checkout Sessions: one-time payments for sales, subscriptions for monthly products. **If unset, the app runs in DEMO PAYMENT MODE** (orange banner; payments are simulated; nothing is charged). | unset |
-| `STRIPE_WEBHOOK_SECRET` | Verifies the `Stripe-Signature` header (HMAC-SHA256). **Required in production.** If unset, events are accepted unverified; this is for dev only. | unset |
+| `STRIPE_WEBHOOK_SECRET` | Verifies the `Stripe-Signature` header (HMAC-SHA256). **Required in production.** If unset, ALL webhook events are rejected (orders can't be marked paid by webhook). | unset |
 | `OPENAI_API_KEY` | Optional. The chat uses an LLM to rephrase replies; data capture and prices stay rule-based. | unset → scripted fallback |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | Any OpenAI-compatible endpoint and model | `https://api.openai.com/v1` / `gpt-4o-mini` |
 | `ADMIN_PASSWORD` | Admin, PO and driver pages | `demo` |
@@ -73,7 +73,7 @@ A simulated Stripe webhook event, posted locally with no real Stripe call, also 
 - **Admin auth:** a single shared password. There are no user accounts and no per-driver login.
 
 ## To go live
-1. **Stripe account.** Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`. Register the webhook URL `https://<domain>/webhook/stripe` for `checkout.session.completed`, `invoice.paid` and `customer.subscription.deleted`. Add a subscription cancel/end flow for rent-to-own term limits. Turn on Stripe Tax if needed.
+1. **Stripe account.** Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`. Register the webhook URL `https://<domain>/stripe/webhook` for `checkout.session.completed` (also send `checkout.session.async_payment_succeeded`). Add a subscription cancel/end flow for rent-to-own term limits. Turn on Stripe Tax if needed.
 2. **LLM key** (optional): `OPENAI_API_KEY` or a compatible endpoint. Keep the price guardrail in place.
 3. **Domain and hosting.** Use HTTPS behind a reverse proxy (Caddy or nginx) on a small VPS, Fly.io or Render. Back up `yards.db` regularly, or move to Postgres.
 4. **Notifications.** Use Twilio (SMS) and SendGrid or Postmark (email) for order confirmations, driver dispatch texts and delivery-day ETAs.
@@ -98,7 +98,7 @@ A simulated Stripe webhook event, posted locally with no real Stripe call, also 
 
 - **Server:** stdlib `ThreadingHTTPServer` (threaded, no dependencies) with SQLite in WAL mode. Run **one instance**, because SQLite lives on a single disk. `GET /healthz` returns JSON (db ok, payment mode, sms/email enabled).
 - **Config:** everything comes from env vars. See `.env.example`. `APP_ENV=production` refuses to start unless `ADMIN_PASSWORD` (not "demo"), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SECRET_KEY` and an `https://` `BASE_URL` are set.
-- **Stripe webhook:** when `STRIPE_WEBHOOK_SECRET` is set, every event must carry a valid `Stripe-Signature` (HMAC-SHA256, 5-minute tolerance). Unsigned or bad events get a 400. In production, unsigned events are always refused.
+- **Stripe webhook:** when `STRIPE_WEBHOOK_SECRET` is set, every event must carry a valid `Stripe-Signature` (HMAC-SHA256, 5-minute tolerance). Unsigned or bad events always get a 400. `/healthz` reports `payments: live` when `STRIPE_SECRET_KEY` is set (`stripe_mode: test|live`).
 - **Notifications (`notify.py`):** when an order is paid, the customer gets an email and SMS confirmation with the delivery date. The assigned driver gets an email and SMS with the job and a link to `BASE_URL/driver/po/<id>`. Day-before reminders go to both, sent once per order. They run from an in-process loop (every 15 min, after `REMINDER_HOUR`, `REMINDER_LOOP=1`) or from `GET /cron/reminders?token=$CRON_TOKEN`. SMS uses Twilio and email uses SendGrid (or SMTP). **Every message is recorded at `/admin/outbox`**. Status is `sent`, `failed` (with the error), or `logged` (no keys or a placeholder address).
 - **Drivers:** driver names, phones, emails and PINs are set at `/admin/settings`. Phones and emails start as placeholders, and PINs start random (or come from `DRIVER1_PIN`…). Drivers sign in at `/driver` with their PIN. They get a signed, HttpOnly 14-day cookie and see **only their own jobs and work orders**, with no access to admin. Admin can still view any driver's board at `/admin/driver/N`.
 
@@ -110,7 +110,7 @@ None of these steps were done for you: no accounts were created and nothing was 
 2. **Stripe.**
    1. Finish account activation (business details, bank account). Test first with `sk_test_…` keys.
    2. Developers → API keys: copy `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY`.
-   3. Developers → Webhooks → Add endpoint `https://YOURDOMAIN/webhook/stripe` with events `checkout.session.completed` and `invoice.paid`. Copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
+   3. Developers → Webhooks → Add endpoint `https://YOURDOMAIN/stripe/webhook` with events `checkout.session.completed` and `invoice.paid`. Copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
    4. Settings → Customer emails: turn on receipts. Settings → Billing: set up the customer portal so renters can update cards.
    5. Test mode: place an order, pay with card 4242 4242 4242 4242, and confirm the order shows as paid in `/admin` and the messages appear in `/admin/outbox`. Then switch to live keys.
 3. **Render.**
