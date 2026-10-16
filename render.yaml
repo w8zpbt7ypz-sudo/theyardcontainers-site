@@ -10,13 +10,13 @@ services:
     numInstances: 1            # SQLite on one disk: keep exactly one instance
     disk:
       name: yards-data
-      mountPath: /data
+      mountPath: /var/data
       sizeGB: 1
     envVars:
       - key: APP_ENV
         value: production
       - key: DB_PATH
-        value: /data/yards.db
+        value: /var/data/yards.db
       - key: BASE_URL
         sync: false              # e.g. https://theyardcontainers.com
       - key: ADMIN_PASSWORD

@@ -112,7 +112,14 @@ FAQ = {
 def db():
     c = sqlite3.connect(DB, timeout=15); c.row_factory = sqlite3.Row; return c
 
+def ensure_data_dir():
+    """Create the folder holding the SQLite file (e.g. a mounted persistent disk at /var/data)."""
+    d = os.path.dirname(os.path.abspath(DB))
+    os.makedirs(d, exist_ok=True)
+    return d
+
 def init_db():
+    ensure_data_dir()
     c = db()
     c.executescript("""
     CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY, created TEXT, product TEXT, size TEXT, mode TEXT,
