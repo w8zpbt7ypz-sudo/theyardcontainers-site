@@ -179,7 +179,28 @@ def create_order(d):
         product, size, mode, d.get("name",""), d.get("phone",""), d.get("email",""), d.get("address",""),
         d.get("date") or (datetime.date.today() + datetime.timedelta(days=2)).isoformat(), d.get("notes",""), one, mon, "pending", None, None, None,
         q.get("zip"), q.get("miles"), q.get("fee"), 1 if truthy(d.get("sms_opt_in")) else 0))
-    c.commit(); c.close(); return oid
+    c.commit(); c.close()
+    if ALERT_PHONE: threading.Thread(target=alert_new_order_sms, args=(oid,), daemon=True).start()
+    return oid
+
+ALERT_PHONE = os.environ.get("ALERT_PHONE", "").strip()
+
+def new_order_sms_text(o):
+    t = (f"New order {o['id']}: {LABEL.get(o['product'], o['product'])} {size_label(o['size'])}, {o['mode']}. "
+         f"{o['name']} {o['phone']}. {o['address'] or '-'} ZIP {o['zip'] or '-'}. Total ${o['one_time']}"
+         + (f" +${o['monthly']}/mo" if o['monthly'] else ""))
+    tail = f". Admin: {BASE_URL}/admin"
+    return t[:320 - len(tail)] + tail
+
+def alert_new_order_sms(oid):
+    """Text the owner (ALERT_PHONE) about every new order, web or phone. Never raises."""
+    if not ALERT_PHONE: return
+    c = db()
+    try:
+        o = c.execute("select * from orders where id=?", (oid,)).fetchone()
+        if o: notify.send(c, "sms", ALERT_PHONE, "", new_order_sms_text(o), "alert_new_order_sms", oid); c.commit()
+    except Exception as e: logging.warning("new-order SMS alert failed: %s", e)
+    finally: c.close()
 
 def assign_driver(c, date):
     # Auto-assign: driver with fewest jobs that date; max 4 jobs/driver/day, else roll to next day.
