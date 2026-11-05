@@ -49,12 +49,13 @@ DELIVERY_BANDS = [                 # last band ends at 100 mi; beyond = call for
     (100, 300, 0,    0),
 ]                                  # beyond last band (100 mi) = call for quote
 WESTERN_DELIVERY_FEE = 1272        # competitor benchmark (user-supplied)
-# OWNER DECISION placeholders — do not invent production dollar amounts beyond these flagged defaults.
+# Fuel/weather stay at $0 until owner sets rates. Deposit: 25% per line, min $300/container.
 FUEL_PERCENT = float(os.environ.get("FUEL_PERCENT", "0"))       # % of transport; OWNER DECISION (default $0)
 FUEL_PER_MILE = float(os.environ.get("FUEL_PER_MILE", "0"))     # $/mile fuel add-on; OWNER DECISION (default $0)
 WEATHER_FEE = int(os.environ.get("WEATHER_FEE", "0"))           # flat $ per line when weather applies; OWNER DECISION (default $0)
 WEATHER_SEASONAL = os.environ.get("WEATHER_SEASONAL", "0") == "1"  # Dec–Mar auto weather; OWNER DECISION
-DEPOSIT_PERCENT = int(os.environ.get("DEPOSIT_PERCENT", "25"))  # OWNER DECISION placeholder
+DEPOSIT_PERCENT = int(os.environ.get("DEPOSIT_PERCENT", "25"))  # of each buy line total
+DEPOSIT_MIN_PER_CONTAINER = int(os.environ.get("DEPOSIT_MIN_PER_CONTAINER", "300"))  # floor per delivery line
 INSTALLMENT_COUNT = int(os.environ.get("INSTALLMENT_COUNT", "3"))  # OWNER DECISION placeholder
 ZIPS = {}
 def load_zips():
@@ -180,6 +181,7 @@ def init_db():
                      ("pin", os.environ.get(f"DRIVER{i}_PIN") or f"{secrets.randbelow(900000)+100000}")):
             c.execute("insert or ignore into settings values(?,?)", (f"driver{i}_{k}", v))
     c.execute("insert or ignore into settings values(?,?)", ("deposit_percent", str(DEPOSIT_PERCENT)))
+    c.execute("insert or ignore into settings values(?,?)", ("deposit_min_per_container", str(DEPOSIT_MIN_PER_CONTAINER)))
     c.execute("insert or ignore into settings values(?,?)", ("installment_count", str(INSTALLMENT_COUNT)))
     if not c.execute("select count(*) from containers").fetchone()[0]:
         for i in range(1, 11):
@@ -195,25 +197,40 @@ def price_order(product, size, mode, fee):
     return fee, PRICES[product][size]["monthly"]
 
 def deposit_percent_value(c=None):
-    """OWNER DECISION placeholder via DEPOSIT_PERCENT / settings.deposit_percent."""
+    """DEPOSIT_PERCENT / settings.deposit_percent (default 25)."""
     if c is not None:
         try: return int(setting(c, "deposit_percent", str(DEPOSIT_PERCENT)))
         except ValueError: pass
     return DEPOSIT_PERCENT
 
+def deposit_min_value(c=None):
+    """DEPOSIT_MIN_PER_CONTAINER / settings.deposit_min_per_container (default 300)."""
+    if c is not None:
+        try: return int(setting(c, "deposit_min_per_container", str(DEPOSIT_MIN_PER_CONTAINER)))
+        except ValueError: pass
+    return DEPOSIT_MIN_PER_CONTAINER
+
 def installment_count_value(c=None):
-    """OWNER DECISION placeholder via INSTALLMENT_COUNT / settings.installment_count."""
+    """INSTALLMENT_COUNT / settings.installment_count."""
     if c is not None:
         try: return max(1, int(setting(c, "installment_count", str(INSTALLMENT_COUNT))))
         except ValueError: pass
     return max(1, INSTALLMENT_COUNT)
 
-def deposit_amount(total, product="buy", c=None):
-    """Deposit due at checkout. Buy orders use DEPOSIT_PERCENT; other products charge full one_time now."""
-    total = int(total or 0)
+def line_deposit_amount(line_total, product="buy", c=None):
+    """Deposit for one buy delivery line: max(25% of line total, $300), capped at the line total."""
+    total = int(line_total or 0)
     if product != "buy": return total
-    pct = deposit_percent_value(c)
-    return int(round(total * pct / 100.0))
+    if total <= 0: return 0
+    raw = int(round(total * deposit_percent_value(c) / 100.0))
+    return min(total, max(raw, deposit_min_value(c)))
+
+def deposit_amount(total, product="buy", c=None, line_totals=None):
+    """Order deposit = sum of per-line deposits when line_totals given; else treat total as one line."""
+    if product != "buy": return int(total or 0)
+    if line_totals is not None:
+        return sum(line_deposit_amount(t, product, c) for t in line_totals)
+    return line_deposit_amount(total, product, c)
 
 def compute_fuel_fee(transport, miles):
     """Fuel surcharge. Defaults to $0 until owner sets FUEL_PERCENT / FUEL_PER_MILE."""
@@ -359,7 +376,7 @@ def create_order(d):
         raise ValueError("All containers on one order must be the same product type")
     oid = "ORD-" + uuid.uuid4().hex[:6].upper()
     c = db()
-    dep = deposit_amount(total_one, product, c)
+    dep = deposit_amount(total_one, product, c, line_totals=[p["line_total"] for p in priced])
     bal = max(0, total_one - dep) if product == "buy" else 0
     if product != "buy": plan = "full"
     c.execute("""insert into orders(id,created,product,size,mode,name,phone,email,address,date,notes,one_time,monthly,status,
@@ -474,7 +491,7 @@ def charge_delivery_line(line_id, session=None, demo=False):
         now = datetime.datetime.now().isoformat(timespec="seconds")
         c.execute("update delivery_lines set status='charged', charged_at=?, stripe_ref=? where id=?", (now, ref, line_id))
         # Reduce order balance by this line's share of remaining (line_total proportional); simple: subtract line_total * (1 - deposit%) 
-        share = ln["line_total"] - deposit_amount(ln["line_total"], o["product"], c)
+        share = ln["line_total"] - line_deposit_amount(ln["line_total"], o["product"], c)
         new_bal = max(0, (o["balance"] or 0) - share)
         c.execute("update orders set balance=? where id=?", (new_bal, o["id"]))
         c.commit(); return True, "charged"
@@ -559,7 +576,7 @@ def stripe_checkout(o):
                  (f"line_items[{i}][quantity]", "1"), ("subscription_data[metadata][order_id]", o["id"])]
         i += 1
     if due:
-        label = (f"Deposit ({DEPOSIT_PERCENT}%) — {name}" if o["product"] == "buy" else (name if not o["monthly"] else "Delivery fee"))
+        label = (f"Deposit ({DEPOSIT_PERCENT}%, min ${DEPOSIT_MIN_PER_CONTAINER}/container) — {name}" if o["product"] == "buy" else (name if not o["monthly"] else "Delivery fee"))
         form += [(f"line_items[{i}][price_data][currency]", "usd"),
                  (f"line_items[{i}][price_data][product_data][name]", label),
                  (f"line_items[{i}][price_data][unit_amount]", str(due*100)), (f"line_items[{i}][quantity]", "1")]
@@ -869,7 +886,7 @@ def checkout_form(q):
     if product not in ENABLED: product = ENABLED[0]
     opts = "".join(f"<option value={k} {'selected' if k==product else ''}>{v}</option>" for k, v in LABEL.items() if k in ENABLED)
     sz_opts = size_options(size)
-    return page("Checkout", f"""<div class=eyebrow>Checkout</div><h2>Order containers</h2><p class=sub>{esc(price_sheet())} Deposit {DEPOSIT_PERCENT}% due at checkout (placeholder — owner sets final %). Fuel and weather default $0 until configured.</p>
+    return page("Checkout", f"""<div class=eyebrow>Checkout</div><h2>Order containers</h2><p class=sub>{esc(price_sheet())} Deposit due now: {DEPOSIT_PERCENT}% (minimum ${DEPOSIT_MIN_PER_CONTAINER} per container), non-refundable except if we cancel or can't deliver the unit you ordered. Fuel and weather default $0 until configured.</p>
 <form method=post action="/order" class=form id=orderForm>
 <div><label>Product</label><select name=product>{opts}</select></div>
 <div><label>{'Buy only: delivery' if RENTALS_ON else 'Delivery or pickup'}</label><select name=mode id=modeSel><option value=delivered>Delivered (fee by ZIP)</option><option value=pickup>Yard pickup</option></select></div>
@@ -892,7 +909,8 @@ def checkout_form(q):
 <div class=full><button class="btn p">Continue to payment</button></div></form>
 <script>
 const SZ=`{sz_opts}`;
-let lineN=0; const DEP={DEPOSIT_PERCENT};
+let lineN=0; const DEP={DEPOSIT_PERCENT}; const DEPMIN={DEPOSIT_MIN_PER_CONTAINER};
+function lineDep(total){{ total=Math.max(0, Math.round(Number(total)||0)); if(!total) return 0; return Math.min(total, Math.max(Math.round(total*DEP/100), DEPMIN)); }}
 function addLine(sz, dt){{
   const i=lineN++;
   const row=document.createElement('div'); row.className='card'; row.style.margin='8px 0'; row.dataset.i=i;
@@ -913,8 +931,16 @@ zres.textContent=r.error?r.error:(r.fee==null?`${{r.miles}} road mi — over 100
 const b=document.querySelector('form.form button.p');const m=document.querySelector('[name=mode]');const block=r.fee==null&&!(m&&m.value=='pickup');b.disabled=!!block;b.textContent=block?'Call for quote — (855) 768-YARD':'Continue to payment'; window._fee=r.fee;est()}}
 function est(){{
   const fee=(modeSel.value==='pickup')?0:(window._fee||0);
-  const n=lines.querySelectorAll('[name^=size_]').length||1;
-  totals.innerHTML=`<p class=sub>Estimated ${{n}} container(s). Delivery band $${{fee||0}} each when delivered. Deposit ${{DEP}}% due now; balance by your selected plan. Final totals on the next screen.</p>`;
+  const sels=[...lines.querySelectorAll('[name^=size_]')];
+  const n=sels.length||1;
+  let orderDep=0, orderTot=0;
+  sels.forEach(s=>{{
+    const m=(s.options[s.selectedIndex]?.text||'').match(/[$]([0-9,]+)/);
+    const box=m?parseInt(m[1].replace(/,/g,''),10):2000;
+    const lt=box+(modeSel.value==='pickup'?0:(fee||0));
+    orderTot+=lt; orderDep+=lineDep(lt);
+  }});
+  totals.innerHTML=`<p class=sub>Estimated ${{n}} container(s) · ~$${{orderTot.toLocaleString()}} total · deposit due now ~$${{orderDep.toLocaleString()}} (${{DEP}}%, min $${{DEPMIN}}/container, non-refundable except if we cancel or can't deliver). Balance ~$${{(orderTot-orderDep).toLocaleString()}} by your selected plan. Server calculates the final amount on the next screen.</p>`;
   syncLegacy();
 }}
 modeSel.addEventListener('change',()=>zq(zip.value));
@@ -939,7 +965,7 @@ def pay_page(o):
         lines = f"<li>{LABEL[o['product']]} {size_label(o['size'])} — <b>${mon}/month</b> (subscription)</li><li>Delivery fee ({esc(dl)}) <b>${one}</b> (one-time)</li>"
         due_note = ""
     else:
-        lines = "".join(items) + f"<li>Order total <b>${one:,}</b></li><li>Deposit due now ({DEPOSIT_PERCENT}%) <b>${dep:,}</b></li><li>Balance ${bal:,} via <b>{esc(plan)}</b></li>"
+        lines = "".join(items) + f"<li>Order total <b>${one:,}</b></li><li>Deposit due now ({DEPOSIT_PERCENT}%, min ${DEPOSIT_MIN_PER_CONTAINER}/container, non-refundable except if we cancel or can't deliver) <b>${dep:,}</b></li><li>Balance ${bal:,} via <b>{esc(plan)}</b></li>"
         due_note = ""
     btn_label_demo = "Simulate deposit payment (demo)" if not mon else "Simulate successful payment (demo)"
     btn_label_live = "Pay deposit with Stripe" if not mon else "Pay with Stripe"
@@ -1009,7 +1035,7 @@ def admin_page():
                if o['status']=='paid' and i['status']!='paid' else "")
             for i in by_inst.get(o["id"], [])) or "—"
         ol_rows.append(
-            f"<tr><td>{o['id']}<div class=sub>plan {esc(o['payment_plan'] or '')} · deposit ${o['deposit'] or 0} · bal ${o['balance'] or 0}</div></td>"
+            f"<tr><td>{o['id']}<div class=sub>plan {esc(o['payment_plan'] or '')} · deposit ${o['deposit'] or 0} ({DEPOSIT_PERCENT}% min ${DEPOSIT_MIN_PER_CONTAINER}/unit) · bal ${o['balance'] or 0}</div></td>"
             f"<td>{esc(o['name'])}</td><td>{LABEL.get(o['product'], o['product'])} {size_label(o['size'])}</td>"
             f"<td>{o['status']}</td><td>{'✔ opted in' if o['sms_opt_in'] else '—'}</td>"
             f"<td>{esc(o['container_id'] or '')}</td><td>{o['driver'] or ''}</td>"
