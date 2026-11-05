@@ -28,4 +28,13 @@ class Legal(unittest.TestCase):
         for p in ("/", "/checkout"):
             h = self.get(p)[1]; self.assertIn("/privacy", h); self.assertIn("/terms", h)
 
+    def test_twilio_exact_phrases(self):
+        import re
+        _, pv = self.get("/privacy")
+        self.assertIn("All the above categories exclude text messaging originator opt-in data and consent; this information won't be shared with any third parties.", pv)
+        _, tm = self.get("/terms"); self.assertIn("Message and data rates may apply", tm)
+        _, co = self.get("/checkout"); self.assertIn("Message and data rates may apply", co)
+        box = re.search(r"<input[^>]*name=sms_opt_in[^>]*>", co).group(0)
+        self.assertNotIn("checked", box)
+
 if __name__ == "__main__": unittest.main()
