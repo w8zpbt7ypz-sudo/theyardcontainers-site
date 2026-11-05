@@ -49,6 +49,13 @@ DELIVERY_BANDS = [                 # last band ends at 100 mi; beyond = call for
     (100, 300, 0,    0),
 ]                                  # beyond last band (100 mi) = call for quote
 WESTERN_DELIVERY_FEE = 1272        # competitor benchmark (user-supplied)
+# OWNER DECISION placeholders — do not invent production dollar amounts beyond these flagged defaults.
+FUEL_PERCENT = float(os.environ.get("FUEL_PERCENT", "0"))       # % of transport; OWNER DECISION (default $0)
+FUEL_PER_MILE = float(os.environ.get("FUEL_PER_MILE", "0"))     # $/mile fuel add-on; OWNER DECISION (default $0)
+WEATHER_FEE = int(os.environ.get("WEATHER_FEE", "0"))           # flat $ per line when weather applies; OWNER DECISION (default $0)
+WEATHER_SEASONAL = os.environ.get("WEATHER_SEASONAL", "0") == "1"  # Dec–Mar auto weather; OWNER DECISION
+DEPOSIT_PERCENT = int(os.environ.get("DEPOSIT_PERCENT", "25"))  # OWNER DECISION placeholder
+INSTALLMENT_COUNT = int(os.environ.get("INSTALLMENT_COUNT", "3"))  # OWNER DECISION placeholder
 ZIPS = {}
 def load_zips():
     import csv
@@ -130,15 +137,50 @@ def init_db():
     CREATE TABLE IF NOT EXISTS containers(id TEXT PRIMARY KEY, size TEXT, status TEXT, order_id TEXT);
     CREATE TABLE IF NOT EXISTS chats(sid TEXT PRIMARY KEY, state TEXT);
     CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
+    CREATE TABLE IF NOT EXISTS delivery_lines(
+      id TEXT PRIMARY KEY, order_id TEXT NOT NULL, line_no INTEGER NOT NULL,
+      product TEXT, size TEXT, mode TEXT, condition TEXT, container_id TEXT,
+      delivery_date TEXT, miles REAL, transport_fee INTEGER, fuel_fee INTEGER, weather_fee INTEGER,
+      container_price INTEGER, line_total INTEGER,
+      status TEXT, charged_at TEXT, stripe_ref TEXT, weather_applied INTEGER NOT NULL DEFAULT 0,
+      driver INTEGER, UNIQUE(order_id, line_no));
+    CREATE TABLE IF NOT EXISTS installments(
+      id TEXT PRIMARY KEY, order_id TEXT NOT NULL, seq INTEGER NOT NULL,
+      amount INTEGER NOT NULL, due_date TEXT, status TEXT, charged_at TEXT, stripe_ref TEXT,
+      UNIQUE(order_id, seq));
     """)
     c.execute("PRAGMA journal_mode=WAL")
     cols = {r[1] for r in c.execute("PRAGMA table_info(orders)")}
     if "sms_opt_in" not in cols: c.execute("ALTER TABLE orders ADD COLUMN sms_opt_in INTEGER NOT NULL DEFAULT 0")
+    for col, decl in (("deposit", "INTEGER"), ("balance", "INTEGER"), ("payment_plan", "TEXT"),
+                      ("deposit_paid_at", "TEXT")):
+        if col not in cols: c.execute(f"ALTER TABLE orders ADD COLUMN {col} {decl}")
+    # Non-destructive: each legacy single-container order becomes one delivery line.
+    for o in c.execute("select * from orders").fetchall():
+        n = c.execute("select count(*) from delivery_lines where order_id=?", (o["id"],)).fetchone()[0]
+        if n: continue
+        lid = "DL-" + uuid.uuid4().hex[:8].upper()
+        fee = o["delivery_fee"] if o["delivery_fee"] is not None else 0
+        one = o["one_time"] if o["one_time"] is not None else 0
+        c.execute("""insert into delivery_lines(id,order_id,line_no,product,size,mode,condition,container_id,
+            delivery_date,miles,transport_fee,fuel_fee,weather_fee,container_price,line_total,status,charged_at,stripe_ref,weather_applied,driver)
+            values(?,?,1,?,?,?,?,?,?,?,?,0,0,?,?,?,?,?,?,?)""",
+            (lid, o["id"], o["product"], o["size"], o["mode"], None, o["container_id"],
+             o["date"], o["miles"], fee, max(0, one - (fee or 0)), one,
+             "charged" if o["status"] == "paid" else "scheduled",
+             None, o["stripe_session"], 0, o["driver"]))
+        if o["deposit"] is None and o["one_time"] is not None:
+            dep = deposit_amount(o["one_time"], o["product"])
+            bal = max(0, (o["one_time"] or 0) - dep) if o["product"] == "buy" else 0
+            plan = o["payment_plan"] or ("per_delivery" if o["product"] == "buy" else "full")
+            c.execute("update orders set deposit=?, balance=?, payment_plan=? where id=?", (dep, bal, plan, o["id"]))
     notify.init(c)
     for i in DRIVERS:   # placeholders; edit in /admin/settings
         for k, v in (("name", f"Driver {i}"), ("phone", f"[driver {i} phone]"), ("email", f"[driver {i} email]"),
                      ("pin", os.environ.get(f"DRIVER{i}_PIN") or f"{secrets.randbelow(900000)+100000}")):
             c.execute("insert or ignore into settings values(?,?)", (f"driver{i}_{k}", v))
+    c.execute("insert or ignore into settings values(?,?)", ("deposit_percent", str(DEPOSIT_PERCENT)))
+    c.execute("insert or ignore into settings values(?,?)", ("installment_count", str(INSTALLMENT_COUNT)))
     if not c.execute("select count(*) from containers").fetchone()[0]:
         for i in range(1, 11):
             c.execute("insert into containers values(?,?,?,NULL)", (f"YC-{i:03d}", "20" if i <= 5 else "40", "available"))
@@ -152,33 +194,192 @@ def price_order(product, size, mode, fee):
         return it["pickup"] + ((fee + it["surcharge"]) if mode == "delivered" else 0), 0
     return fee, PRICES[product][size]["monthly"]
 
+def deposit_percent_value(c=None):
+    """OWNER DECISION placeholder via DEPOSIT_PERCENT / settings.deposit_percent."""
+    if c is not None:
+        try: return int(setting(c, "deposit_percent", str(DEPOSIT_PERCENT)))
+        except ValueError: pass
+    return DEPOSIT_PERCENT
+
+def installment_count_value(c=None):
+    """OWNER DECISION placeholder via INSTALLMENT_COUNT / settings.installment_count."""
+    if c is not None:
+        try: return max(1, int(setting(c, "installment_count", str(INSTALLMENT_COUNT))))
+        except ValueError: pass
+    return max(1, INSTALLMENT_COUNT)
+
+def deposit_amount(total, product="buy", c=None):
+    """Deposit due at checkout. Buy orders use DEPOSIT_PERCENT; other products charge full one_time now."""
+    total = int(total or 0)
+    if product != "buy": return total
+    pct = deposit_percent_value(c)
+    return int(round(total * pct / 100.0))
+
+def compute_fuel_fee(transport, miles):
+    """Fuel surcharge. Defaults to $0 until owner sets FUEL_PERCENT / FUEL_PER_MILE."""
+    transport = int(transport or 0); miles = float(miles or 0)
+    return int(round(transport * FUEL_PERCENT / 100.0 + miles * FUEL_PER_MILE))
+
+def compute_weather_fee(delivery_date="", weather_applied=False):
+    """Weather surcharge. Defaults to $0. Applied when flagged or (if WEATHER_SEASONAL) Dec–Mar."""
+    if weather_applied: return WEATHER_FEE
+    if WEATHER_SEASONAL and delivery_date:
+        try:
+            m = datetime.date.fromisoformat(str(delivery_date)[:10]).month
+            if m in (12, 1, 2, 3): return WEATHER_FEE
+        except ValueError: pass
+    return 0
+
+def price_delivery_line(product, size, mode, zipc, delivery_date="", weather_applied=False):
+    """Per-line transport (existing bands) + fuel + weather + container price. Returns dict."""
+    mode = mode or "delivered"
+    q = {"zip": zipc or "", "miles": None, "fee": 0}
+    if mode == "delivered":
+        q = quote_delivery(zipc or "")
+        if q.get("error"): raise ValueError("Unknown ZIP code")
+        if q["fee"] is None: raise ValueError(f"{q['miles']} mi is beyond our 100-mile delivery area — call for a quote")
+    transport = int(q.get("fee") or 0)
+    fuel = compute_fuel_fee(transport, q.get("miles") or 0)
+    weather = compute_weather_fee(delivery_date, weather_applied)
+    one, mon = price_order(product, size, mode, transport)
+    # container_price = one_time minus transport (buy); rentals keep transport as one_time
+    if product == "buy":
+        container_price = one - transport - (catalog_item(size)["surcharge"] if mode == "delivered" and catalog_item(size) else 0)
+        # price_order already included transport+surcharge in one; rebuild cleanly:
+        it = catalog_item(size)
+        container_price = it["pickup"]
+        surcharge = it["surcharge"] if mode == "delivered" else 0
+        line_total = container_price + (transport + surcharge + fuel + weather if mode == "delivered" else 0)
+        return {"zip": q.get("zip"), "miles": q.get("miles"), "transport_fee": transport if mode == "delivered" else 0,
+                "fuel_fee": fuel if mode == "delivered" else 0, "weather_fee": weather if mode == "delivered" else 0,
+                "container_price": container_price, "surcharge": surcharge, "line_total": line_total, "monthly": 0, "mode": mode, "size": it["sku"]}
+    return {"zip": q.get("zip"), "miles": q.get("miles"), "transport_fee": transport, "fuel_fee": fuel,
+            "weather_fee": weather, "container_price": 0, "surcharge": 0,
+            "line_total": transport + fuel + weather, "monthly": mon, "mode": mode, "size": size}
+
+def parse_order_lines(d):
+    """Normalize payload to a list of line dicts. Supports legacy single fields or lines[] / size_N."""
+    lines = d.get("lines")
+    if isinstance(lines, str):
+        try: lines = json.loads(lines)
+        except ValueError: lines = None
+    if isinstance(lines, list) and lines:
+        out = []
+        for i, ln in enumerate(lines):
+            if not isinstance(ln, dict): continue
+            raw_p = ln.get("product") if ln.get("product") not in (None, "") else d.get("product")
+            out.append({
+                "product": (raw_p if raw_p is not None else "buy").lower().strip(),
+                "size": str(ln.get("size") or "").strip(),
+                "mode": (ln.get("mode") or d.get("mode") or "delivered").lower(),
+                "date": (ln.get("date") or ln.get("delivery_date") or "").strip(),
+                "weather_applied": truthy(ln.get("weather_applied")),
+            })
+        if out: return out
+    # Form fields size_0 / date_0 / mode_0 ...
+    indexed = []
+    for i in range(0, 50):
+        sz = d.get(f"size_{i}")
+        if sz is None or str(sz).strip() == "": 
+            if i == 0 and d.get("size"): break
+            if i > 0: break
+            continue
+        raw_p = d.get(f"product_{i}")
+        if raw_p in (None, ""): raw_p = d.get("product")
+        indexed.append({
+            "product": (raw_p if raw_p is not None else "buy").lower().strip(),
+            "size": str(sz).strip(),
+            "mode": (d.get(f"mode_{i}") or d.get("mode") or "delivered").lower(),
+            "date": str(d.get(f"date_{i}") or d.get("date") or "").strip(),
+            "weather_applied": truthy(d.get(f"weather_{i}")),
+        })
+    if indexed: return indexed
+    # Legacy single-container
+    raw_p = d.get("product")
+    return [{
+        "product": (raw_p if raw_p is not None else "buy").lower().strip() if raw_p != "" else "",
+        "size": str(d.get("size") or "").strip(),
+        "mode": (d.get("mode") or "delivered").lower(),
+        "date": str(d.get("date") or "").strip(),
+        "weather_applied": truthy(d.get("weather_applied")),
+    }]
+
+def build_installment_schedule(c, oid, balance, count=None, start=None):
+    """Split balance into INSTALLMENT_COUNT rows (last row gets remainder). Sums to balance."""
+    count = count or installment_count_value(c)
+    balance = int(balance or 0)
+    if balance <= 0 or count <= 0: return []
+    base = balance // count; rem = balance - base * count
+    start = start or datetime.date.today()
+    ids = []
+    for i in range(count):
+        amt = base + (rem if i == count - 1 else 0)
+        iid = "IN-" + uuid.uuid4().hex[:8].upper()
+        due = (start + datetime.timedelta(days=30 * (i + 1))).isoformat()
+        c.execute("insert into installments(id,order_id,seq,amount,due_date,status,charged_at,stripe_ref) values(?,?,?,?,?,'scheduled',NULL,NULL)",
+                  (iid, oid, i + 1, amt, due))
+        ids.append(iid)
+    return ids
+
 def truthy(v):
     if isinstance(v, bool): return v
     return str(v or "").strip().lower() in ("1", "true", "yes", "on", "y")
 
 def create_order(d):
-    """Returns order id, or raises ValueError (unknown ZIP / call for quote)."""
-    product, size = d.get("product", ""), d.get("size", "")
-    if product_error(product): raise ValueError(product_error(product))
-    if product == "buy":
-        if not catalog_item(size): raise ValueError("That container isn't available online - call (855) 768-YARD for a quote" if CATALOG_LIVE else "Size must be 20 or 40")
-        size = catalog_item(size)["sku"]
-    elif size not in ("20", "40"): raise ValueError("Size must be 20 or 40")
-    mode = d.get("mode") if product == "buy" else "delivered"
-    mode = mode or "delivered"
-    q = {"zip": d.get("zip",""), "miles": None, "fee": 0}
-    if mode == "delivered":
-        q = quote_delivery(d.get("zip", ""))
-        if q.get("error"): raise ValueError("Unknown ZIP code")
-        if q["fee"] is None: raise ValueError(f"{q['miles']} mi is beyond our 100-mile delivery area — call for a quote")
-    one, mon = price_order(product, size, mode, q["fee"])
+    """Create one parent order with one delivery_line per container. Legacy single-container payloads still work.
+    Returns order id, or raises ValueError (unknown ZIP / call for quote)."""
+    raw_lines = parse_order_lines(d)
+    if not raw_lines: raise ValueError("At least one container is required")
+    plan = (d.get("payment_plan") or "per_delivery").strip().lower()
+    if plan not in ("per_delivery", "installments", "full"): plan = "per_delivery"
+    default_date = d.get("date") or (datetime.date.today() + datetime.timedelta(days=2)).isoformat()
+    priced = []
+    for ln in raw_lines:
+        product = ln["product"]
+        if product_error(product): raise ValueError(product_error(product))
+        product = product or "buy"
+        size, mode = ln["size"], (ln["mode"] if product == "buy" else "delivered") or "delivered"
+        if product == "buy":
+            if not catalog_item(size): raise ValueError("That container isn't available online - call (855) 768-YARD for a quote" if CATALOG_LIVE else "Size must be 20 or 40")
+        elif size not in ("20", "40"): raise ValueError("Size must be 20 or 40")
+        date = ln["date"] or default_date
+        if date:
+            try: datetime.date.fromisoformat(str(date)[:10])
+            except ValueError: raise ValueError("date must be YYYY-MM-DD")
+        pl = price_delivery_line(product, size, mode, d.get("zip", ""), date, ln.get("weather_applied"))
+        pl.update(product=product, date=date, weather_applied=1 if ln.get("weather_applied") else 0)
+        priced.append(pl)
+    # Parent mirrors first line for legacy columns; totals sum all lines.
+    first = priced[0]
+    total_one = sum(p["line_total"] for p in priced)
+    total_mon = sum(p["monthly"] for p in priced)
+    # Multi-line buy: one shared monthly not supported; monthly only on single rental lines.
+    product = first["product"]; size = first["size"]; mode = first["mode"]
+    if any(p["product"] != product for p in priced):
+        raise ValueError("All containers on one order must be the same product type")
     oid = "ORD-" + uuid.uuid4().hex[:6].upper()
     c = db()
+    dep = deposit_amount(total_one, product, c)
+    bal = max(0, total_one - dep) if product == "buy" else 0
+    if product != "buy": plan = "full"
     c.execute("""insert into orders(id,created,product,size,mode,name,phone,email,address,date,notes,one_time,monthly,status,
-        stripe_session,container_id,driver,zip,miles,delivery_fee,sms_opt_in) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (oid, datetime.datetime.now().isoformat(timespec="seconds"),
-        product, size, mode, d.get("name",""), d.get("phone",""), d.get("email",""), d.get("address",""),
-        d.get("date") or (datetime.date.today() + datetime.timedelta(days=2)).isoformat(), d.get("notes",""), one, mon, "pending", None, None, None,
-        q.get("zip"), q.get("miles"), q.get("fee"), 1 if truthy(d.get("sms_opt_in")) else 0))
+        stripe_session,container_id,driver,zip,miles,delivery_fee,sms_opt_in,deposit,balance,payment_plan,deposit_paid_at)
+        values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (oid, datetime.datetime.now().isoformat(timespec="seconds"),
+         product, size, mode, d.get("name",""), d.get("phone",""), d.get("email",""), d.get("address",""),
+         first["date"], d.get("notes",""), total_one, total_mon, "pending", None, None, None,
+         first.get("zip") or d.get("zip",""), first.get("miles"), first.get("transport_fee"),
+         1 if truthy(d.get("sms_opt_in")) else 0, dep, bal, plan, None))
+    for i, p in enumerate(priced, 1):
+        lid = "DL-" + uuid.uuid4().hex[:8].upper()
+        transport = p["transport_fee"] + p.get("surcharge", 0)
+        c.execute("""insert into delivery_lines(id,order_id,line_no,product,size,mode,condition,container_id,
+            delivery_date,miles,transport_fee,fuel_fee,weather_fee,container_price,line_total,status,charged_at,stripe_ref,weather_applied,driver)
+            values(?,?,?,?,?,?,NULL,NULL,?,?,?,?,?,?,?,'scheduled',NULL,NULL,?,NULL)""",
+            (lid, oid, i, p["product"], p["size"], p["mode"], p["date"], p.get("miles"),
+             transport, p["fuel_fee"], p["weather_fee"], p["container_price"], p["line_total"], p["weather_applied"]))
+    if plan == "installments" and bal > 0:
+        build_installment_schedule(c, oid, bal)
     c.commit(); c.close()
     if ALERT_PHONE: threading.Thread(target=alert_new_order_sms, args=(oid,), daemon=True).start()
     return oid
@@ -186,8 +387,15 @@ def create_order(d):
 ALERT_PHONE = os.environ.get("ALERT_PHONE", "").strip()
 
 def new_order_sms_text(o):
-    t = (f"New order {o['id']}: {LABEL.get(o['product'], o['product'])} {size_label(o['size'])}, {o['mode']}. "
+    try:
+        c = db(); n = c.execute("select count(*) from delivery_lines where order_id=?", (o["id"],)).fetchone()[0]; c.close()
+    except Exception: n = 0
+    multi = f", {n} containers" if n and n > 1 else ""
+    keys = o.keys() if hasattr(o, "keys") else o
+    dep = o["deposit"] if "deposit" in keys and o["deposit"] is not None else o["one_time"]
+    t = (f"New order {o['id']}: {LABEL.get(o['product'], o['product'])} {size_label(o['size'])}{multi}, {o['mode']}. "
          f"{o['name']} {o['phone']}. {o['address'] or '-'} ZIP {o['zip'] or '-'}. Total ${o['one_time']}"
+         + (f" deposit ${dep}" if o["product"] == "buy" else "")
          + (f" +${o['monthly']}/mo" if o['monthly'] else ""))
     tail = f". Admin: {BASE_URL}/admin"
     return t[:320 - len(tail)] + tail
@@ -212,20 +420,34 @@ def assign_driver(c, date):
         d += datetime.timedelta(days=1)
     return 1, d.isoformat()
 
+def _alloc_size(size):
+    return {v: k for k, v in LEGACY.items()}.get(size, size)
+
 def mark_paid(oid, session=None):
-    """Mark an order paid and send the paid-order emails/SMS. Idempotent and race-safe: the first caller to flip
-    status to 'paid' (atomic UPDATE ... WHERE status != 'paid') does the work; duplicates return False and send nothing."""
+    """Mark deposit paid (order confirmed). Idempotent. Assigns inventory per delivery line; parent keeps first line's box/driver for legacy views."""
     c = db()
     try:
-        cur = c.execute("update orders set status='paid', stripe_session=coalesce(?,stripe_session) where id=? and status!='paid'", (session, oid))
-        if cur.rowcount != 1: c.rollback(); return False       # unknown order, or already paid (duplicate webhook / demo click)
+        cur = c.execute("update orders set status='paid', stripe_session=coalesce(?,stripe_session), deposit_paid_at=coalesce(deposit_paid_at, ?) where id=? and status!='paid'",
+                        (session, datetime.datetime.now().isoformat(timespec="seconds"), oid))
+        if cur.rowcount != 1: c.rollback(); return False
         o = c.execute("select * from orders where id=?", (oid,)).fetchone()
-        status = {"buy": "sold", "rent": "rented", "lease": "leased", "rto": "rented"}[o["product"]]
-        box = c.execute("select id from containers where size=? and status='available' order by id limit 1", ({v: k for k, v in LEGACY.items()}.get(o["size"], o["size"]),)).fetchone()
-        cid = box["id"] if box else None
-        if cid: c.execute("update containers set status=?, order_id=? where id=?", (status, oid, cid))
-        drv, date = assign_driver(c, o["date"])
-        c.execute("update orders set container_id=?, driver=?, date=? where id=?", (cid or "BACKORDER (source new box)", drv, date, oid))
+        inv_status = {"buy": "sold", "rent": "rented", "lease": "leased", "rto": "rented"}[o["product"]]
+        lines = c.execute("select * from delivery_lines where order_id=? order by line_no", (oid,)).fetchall()
+        first_cid, first_drv, first_date = None, None, o["date"]
+        for ln in lines:
+            box = c.execute("select id from containers where size=? and status='available' order by id limit 1", (_alloc_size(ln["size"]),)).fetchone()
+            cid = box["id"] if box else None
+            if cid: c.execute("update containers set status=?, order_id=? where id=?", (inv_status, oid, cid))
+            drv, date = assign_driver(c, ln["delivery_date"] or o["date"])
+            c.execute("update delivery_lines set container_id=?, driver=?, delivery_date=? where id=?",
+                      (cid or "BACKORDER (source new box)", drv, date, ln["id"]))
+            if first_cid is None:
+                first_cid, first_drv, first_date = (cid or "BACKORDER (source new box)"), drv, date
+        c.execute("update orders set container_id=?, driver=?, date=? where id=?", (first_cid, first_drv, first_date, oid))
+        # Buy + full payment plan with no remaining balance: mark lines charged
+        if o["product"] == "buy" and (o["balance"] or 0) == 0:
+            c.execute("update delivery_lines set status='charged', charged_at=?, stripe_ref=coalesce(stripe_ref,?) where order_id=?",
+                      (datetime.datetime.now().isoformat(timespec="seconds"), session, oid))
         o = c.execute("select * from orders where id=?", (oid,)).fetchone()
         notify_paid(c, o)
         c.commit(); return True
@@ -234,25 +456,113 @@ def mark_paid(oid, session=None):
     finally:
         c.close()
 
+def order_lines(oid):
+    c = db(); rows = c.execute("select * from delivery_lines where order_id=? order by line_no", (oid,)).fetchall(); c.close(); return rows
+
+def charge_delivery_line(line_id, session=None, demo=False):
+    """Charge the balance share for one delivery line (per_delivery plan). Returns (ok, message)."""
+    c = db()
+    try:
+        ln = c.execute("select * from delivery_lines where id=?", (line_id,)).fetchone()
+        if not ln: return False, "line not found"
+        o = c.execute("select * from orders where id=?", (ln["order_id"],)).fetchone()
+        if not o or o["status"] != "paid": return False, "deposit not paid"
+        if o["payment_plan"] != "per_delivery": return False, "order is not on per_delivery plan"
+        if ln["status"] in ("charged", "dispatched", "delivered"): return False, "already charged"
+        ref = session or (("demo_line_" + uuid.uuid4().hex[:8]) if demo or DEMO else None)
+        if not ref and not DEMO: return False, "stripe ref required in live mode"
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        c.execute("update delivery_lines set status='charged', charged_at=?, stripe_ref=? where id=?", (now, ref, line_id))
+        # Reduce order balance by this line's share of remaining (line_total proportional); simple: subtract line_total * (1 - deposit%) 
+        share = ln["line_total"] - deposit_amount(ln["line_total"], o["product"], c)
+        new_bal = max(0, (o["balance"] or 0) - share)
+        c.execute("update orders set balance=? where id=?", (new_bal, o["id"]))
+        c.commit(); return True, "charged"
+    except Exception:
+        c.rollback(); raise
+    finally:
+        c.close()
+
+def dispatch_delivery_line(line_id):
+    """Mark line dispatched. Blocked until charged when payment_plan is per_delivery."""
+    c = db()
+    try:
+        ln = c.execute("select * from delivery_lines where id=?", (line_id,)).fetchone()
+        if not ln: return False, "line not found"
+        o = c.execute("select * from orders where id=?", (ln["order_id"],)).fetchone()
+        if not o or o["status"] != "paid": return False, "deposit not paid"
+        if o["payment_plan"] == "per_delivery" and ln["status"] not in ("charged", "dispatched", "delivered"):
+            return False, "charge balance for this delivery before dispatch"
+        if o["payment_plan"] == "installments":
+            open_amt = c.execute("select coalesce(sum(amount),0) from installments where order_id=? and status!='paid'", (o["id"],)).fetchone()[0]
+            # Installments don't block individual dispatch once deposit paid; owner may still charge installments separately.
+            pass
+        if ln["status"] == "scheduled":
+            # installments / full: allow dispatch without per-line charge
+            c.execute("update delivery_lines set status='dispatched' where id=?", (line_id,))
+        else:
+            c.execute("update delivery_lines set status='dispatched' where id=? and status in ('charged','dispatched')", (line_id,))
+        c.commit(); return True, "dispatched"
+    except Exception:
+        c.rollback(); raise
+    finally:
+        c.close()
+
+def charge_installment(inst_id, session=None, demo=False):
+    c = db()
+    try:
+        inst = c.execute("select * from installments where id=?", (inst_id,)).fetchone()
+        if not inst: return False, "installment not found"
+        if inst["status"] == "paid": return False, "already paid"
+        o = c.execute("select * from orders where id=?", (inst["order_id"],)).fetchone()
+        if not o or o["status"] != "paid": return False, "deposit not paid"
+        ref = session or (("demo_inst_" + uuid.uuid4().hex[:8]) if demo or DEMO else None)
+        if not ref and not DEMO: return False, "stripe ref required in live mode"
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        c.execute("update installments set status='paid', charged_at=?, stripe_ref=? where id=?", (now, ref, inst_id))
+        new_bal = max(0, (o["balance"] or 0) - inst["amount"])
+        c.execute("update orders set balance=? where id=?", (new_bal, o["id"]))
+        if new_bal == 0:
+            c.execute("update delivery_lines set status='charged', charged_at=coalesce(charged_at,?), stripe_ref=coalesce(stripe_ref,?) where order_id=? and status='scheduled'",
+                      (now, ref, o["id"]))
+        c.commit(); return True, "charged"
+    except Exception:
+        c.rollback(); raise
+    finally:
+        c.close()
+
 # ---------------- Stripe (REST via urllib; only used if STRIPE_SECRET_KEY set) ----------------
+def amount_due_now(o):
+    """Cents-facing dollar amount charged at checkout: deposit for buy, else full one_time."""
+    if o["product"] == "buy":
+        dep = o["deposit"] if o["deposit"] is not None else deposit_amount(o["one_time"], "buy")
+        return int(dep or 0)
+    return int(o["one_time"] or 0)
+
 def stripe_checkout(o):
-    name = f"{LABEL[o['product']]} – {size_label(o['size'])} container"
+    n_lines = 0
+    try:
+        c = db(); n_lines = c.execute("select count(*) from delivery_lines where order_id=?", (o["id"],)).fetchone()[0]; c.close()
+    except Exception: pass
+    name = f"{LABEL[o['product']]} – {size_label(o['size'])} container" + (f" (×{n_lines})" if n_lines > 1 else "")
+    due = amount_due_now(o)
     form = [("mode", "subscription" if o["monthly"] else "payment"),
             ("success_url", f"{BASE_URL}/success/{o['id']}"), ("cancel_url", f"{BASE_URL}/pay/{o['id']}"),
-            ("client_reference_id", o["id"]), ("metadata[order_id]", o["id"])]
+            ("client_reference_id", o["id"]), ("metadata[order_id]", o["id"]), ("metadata[charge_type]", "deposit" if o["product"] == "buy" else "full")]
     if "@" in (o["email"] or ""): form.append(("customer_email", o["email"]))
-    if not o["monthly"]:   # one-time sale: carry the order id onto the PaymentIntent too (easier refunds/reconciliation)
-        form += [("payment_intent_data[metadata][order_id]", o["id"]), ("payment_intent_data[description]", f"The Yard Containers order {o['id']}")]
+    if not o["monthly"]:
+        form += [("payment_intent_data[metadata][order_id]", o["id"]), ("payment_intent_data[description]", f"The Yard Containers order {o['id']} deposit" if o["product"]=="buy" else f"The Yard Containers order {o['id']}")]
     i = 0
     if o["monthly"]:
         form += [(f"line_items[{i}][price_data][currency]", "usd"), (f"line_items[{i}][price_data][product_data][name]", name + " (monthly)"),
                  (f"line_items[{i}][price_data][unit_amount]", str(o["monthly"]*100)), (f"line_items[{i}][price_data][recurring][interval]", "month"),
                  (f"line_items[{i}][quantity]", "1"), ("subscription_data[metadata][order_id]", o["id"])]
         i += 1
-    if o["one_time"]:
+    if due:
+        label = (f"Deposit ({DEPOSIT_PERCENT}%) — {name}" if o["product"] == "buy" else (name if not o["monthly"] else "Delivery fee"))
         form += [(f"line_items[{i}][price_data][currency]", "usd"),
-                 (f"line_items[{i}][price_data][product_data][name]", name if not o["monthly"] else "Delivery fee"),
-                 (f"line_items[{i}][price_data][unit_amount]", str(o["one_time"]*100)), (f"line_items[{i}][quantity]", "1")]
+                 (f"line_items[{i}][price_data][product_data][name]", label),
+                 (f"line_items[{i}][price_data][unit_amount]", str(due*100)), (f"line_items[{i}][quantity]", "1")]
     req = urllib.request.Request(STRIPE_API_BASE + "/v1/checkout/sessions", data=urllib.parse.urlencode(form).encode(),
         headers={"Authorization": "Bearer " + STRIPE_KEY})
     return json.load(urllib.request.urlopen(req, timeout=20))
@@ -273,18 +583,39 @@ def setting(c, k, default=""):
 def driver_info(c, i):
     return {k: setting(c, f"driver{i}_{k}") for k in ("name", "phone", "email", "pin")}
 
-VOICE_FIELDS = ("name", "phone", "email", "address", "zip", "size", "product", "mode", "date", "notes")
+VOICE_FIELDS = ("name", "phone", "email", "address", "zip", "size", "product", "mode", "date", "notes", "payment_plan")
 def voice_order(d):
-    """Validate a phone-assistant order. Returns (status, dict)."""
+    """Validate a phone-assistant order. Returns (status, dict). Accepts legacy single-container or lines[]."""
     if not isinstance(d, dict): return 400, {"error": "JSON object expected"}
     opt = truthy(d.get("sms_opt_in"))
-    d = {k: str(d.get(k) or "").strip() for k in VOICE_FIELDS}; d["sms_opt_in"] = opt
-    d["size"] = d["size"].rstrip("'").replace("ft", "").strip()
-    d["product"] = d["product"].lower(); d["mode"] = (d["mode"] or "delivered").lower()
-    d["size"] = d["size"].lower()
-    if d["product"] in ("buy", "") and not catalog_item(d["size"]):
+    plan = (d.get("payment_plan") or "per_delivery")
+    lines_in = d.get("lines")
+    base = {k: str(d.get(k) or "").strip() for k in VOICE_FIELDS if k != "payment_plan"}
+    base["sms_opt_in"] = opt; base["payment_plan"] = str(plan).strip().lower() or "per_delivery"
+    if isinstance(lines_in, list) and lines_in:
+        base["lines"] = lines_in
+        # Derive top-level size/product for validation echoes from first line
+        first = lines_in[0] if isinstance(lines_in[0], dict) else {}
+        base["size"] = str(first.get("size") or base.get("size") or "").strip()
+        base["product"] = str(first.get("product") or base.get("product") or "buy").lower()
+        base["mode"] = str(first.get("mode") or base.get("mode") or "delivered").lower()
+        base["date"] = str(first.get("date") or first.get("delivery_date") or base.get("date") or "").strip()
+    base["size"] = base["size"].rstrip("'").replace("ft", "").strip().lower()
+    base["product"] = (base["product"] or "buy").lower(); base["mode"] = (base["mode"] or "delivered").lower()
+    d = base
+    if d["product"] in ("buy", "") and not catalog_item(d["size"]) and not d.get("lines"):
         return 400, {"error": "size must be 20 or 40" if not CATALOG_LIVE else "not orderable online - take details for a quote", "code": "call_for_quote" if CATALOG_LIVE else "bad_size"}
-    if d["product"] not in ("buy", "") and d["size"] not in ("20", "40"): return 400, {"error": "size must be 20 or 40"}
+    if d.get("lines"):
+        for ln in d["lines"]:
+            if not isinstance(ln, dict): return 400, {"error": "each line must be an object"}
+            sz = str(ln.get("size") or "").rstrip("'").replace("ft", "").strip().lower()
+            prod = (ln.get("product") or d["product"] or "buy").lower()
+            if prod == "buy" and not catalog_item(sz):
+                return 400, {"error": "size must be 20 or 40" if not CATALOG_LIVE else "not orderable online - take details for a quote", "code": "call_for_quote" if CATALOG_LIVE else "bad_size"}
+            if prod not in ("buy", "") and sz not in ("20", "40"): return 400, {"error": "size must be 20 or 40"}
+            ln["size"] = sz; ln["product"] = prod
+    elif d["product"] not in ("buy", "") and d["size"] not in ("20", "40"):
+        return 400, {"error": "size must be 20 or 40"}
     if d["product"] not in LABEL: return 400, {"error": "product must be one of: " + ", ".join(ENABLED)}
     if product_error(d["product"]): return 400, {"error": "product_not_offered", "message": NOT_OFFERED, "enabled_products": ENABLED}
     if d["mode"] not in ("delivered", "pickup"): return 400, {"error": "mode must be delivered or pickup"}
@@ -299,19 +630,23 @@ def voice_order(d):
     except ValueError as e:
         q = quote_delivery(d["zip"]); code = "unknown_zip" if q.get("error") else "call_for_quote"
         return 422, {"error": str(e), "code": code, "miles": q.get("miles")}
-    c = db(); o = c.execute("select * from orders where id=?", (oid,)).fetchone(); c.close()
-    totals = {"one_time": o["one_time"], "monthly": o["monthly"], "delivery_fee": o["delivery_fee"], "miles": o["miles"]}
+    c = db(); o = c.execute("select * from orders where id=?", (oid,)).fetchone()
+    dlines = c.execute("select line_no,size,delivery_date,transport_fee,fuel_fee,weather_fee,container_price,line_total,status from delivery_lines where order_id=? order by line_no", (oid,)).fetchall()
+    c.close()
+    totals = {"one_time": o["one_time"], "monthly": o["monthly"], "delivery_fee": o["delivery_fee"], "miles": o["miles"],
+              "deposit": o["deposit"], "balance": o["balance"], "payment_plan": o["payment_plan"]}
     pay_url = f"{BASE_URL}/pay/{oid}"
     alert = (f"NEW PHONE ORDER {oid} (unpaid): {LABEL[o['product']]} {size_label(o['size'])} container, {o['mode']}, {o['date']} -> {o['address'] or '-'} "
-             f"(ZIP {o['zip'] or '-'}). Customer {o['name']} {o['phone']} {o['email'] or '-'}. Due now ${o['one_time']}"
+             f"(ZIP {o['zip'] or '-'}). Customer {o['name']} {o['phone']} {o['email'] or '-'}. Due now ${amount_due_now(o)}"
              + (f", then ${o['monthly']}/mo" if o["monthly"] else "") + f". Text updates: {'YES (opted in)' if o['sms_opt_in'] else 'no'}. Notes: {o['notes']}. Pay link: {pay_url}  Admin: {BASE_URL}/admin")
     def _alert():
         c2 = db()
         try: notify.send(c2, "email", notify.ALERT_EMAIL, f"New phone order {oid} — {o['name']}", alert, "alert_voice", oid); c2.commit()
         except Exception as e: logging.warning("voice alert failed: %s", e)
         finally: c2.close()
-    threading.Thread(target=_alert, daemon=True).start()   # don't hold the caller while mail goes out
-    return 200, {"order_id": oid, "totals": totals, "pay_url": pay_url}
+    threading.Thread(target=_alert, daemon=True).start()
+    return 200, {"order_id": oid, "totals": totals, "pay_url": pay_url, "lines": [dict(x) for x in dlines]}
+
 
 def notify_paid(c, o):
     d = driver_info(c, o["driver"]); when = o["date"]
@@ -528,59 +863,159 @@ def catalog_page():
 <table class=t><tr><th>Container</th><th>Condition</th><th>Pickup</th><th>Delivered from</th><th>Online</th><th>Availability</th><th>Comp low / median</th><th>Conf.</th><th></th></tr>{rows}</table>
 <h3 style="margin-top:32px">Add-ons</h3><table class=t>{adds}</table>""")
 
+
 def checkout_form(q):
     product = q.get("product", ["buy"])[0]; size = q.get("size", ["20"])[0]
     if product not in ENABLED: product = ENABLED[0]
     opts = "".join(f"<option value={k} {'selected' if k==product else ''}>{v}</option>" for k, v in LABEL.items() if k in ENABLED)
-    return page("Checkout", f"""<div class=eyebrow>Checkout</div><h2>Order a container</h2><p class=sub>{esc(price_sheet())}</p>
-<form method=post action="/order" class=form>
+    sz_opts = size_options(size)
+    return page("Checkout", f"""<div class=eyebrow>Checkout</div><h2>Order containers</h2><p class=sub>{esc(price_sheet())} Deposit {DEPOSIT_PERCENT}% due at checkout (placeholder — owner sets final %). Fuel and weather default $0 until configured.</p>
+<form method=post action="/order" class=form id=orderForm>
 <div><label>Product</label><select name=product>{opts}</select></div>
-<div><label>Container</label><select name=size>{size_options(size)}</select></div>
-<div><label>{'Buy only: delivery' if RENTALS_ON else 'Delivery or pickup'}</label><select name=mode><option value=delivered>Delivered (fee by ZIP)</option><option value=pickup>Yard pickup</option></select></div>
+<div><label>{'Buy only: delivery' if RENTALS_ON else 'Delivery or pickup'}</label><select name=mode id=modeSel><option value=delivered>Delivered (fee by ZIP)</option><option value=pickup>Yard pickup</option></select></div>
 <div><label>Delivery ZIP</label><input name=zip id=zip maxlength=5 oninput="zq(this.value)"><div id=zres class=sub></div></div>
-<div><label>Date</label><input name=date type=date required></div>
+<div class=full><label>Containers &amp; delivery dates</label>
+<div id=lines></div>
+<button type=button class=btn onclick="addLine()" style="margin-top:8px">+ Add another container</button>
+</div>
+<input type=hidden name=size id=legacySize value="{esc(size)}">
+<input type=hidden name=date id=legacyDate>
+<div class=full><label>Balance after deposit</label>
+<label style="font-weight:normal;margin-right:16px"><input type=radio name=payment_plan value=per_delivery checked style="width:auto"> Charge per delivery before dispatch</label>
+<label style="font-weight:normal"><input type=radio name=payment_plan value=installments style="width:auto"> Pay balance in {INSTALLMENT_COUNT} installments</label>
+</div>
 <div><label>Name</label><input name=name required></div><div><label>Phone</label><input name=phone required></div>
 <div><label>Email</label><input name=email type=email required></div><div><label>Delivery address</label><input name=address required></div>
 <div class=full><label>Site conditions / notes</label><textarea name=notes rows=3></textarea></div>
+<div class=full id=totals></div>
 <div class=full><label style="display:flex;gap:8px;align-items:flex-start;font-weight:normal"><input type=checkbox name=sms_opt_in value=1 style="width:auto;margin-top:4px"> <span>Text me updates about my order<br><span class=sub style="font-size:.85em">By checking this box, you agree to receive order-related text messages from The Yard Containers at the phone number above. Message and data rates may apply. Msg frequency varies. Reply STOP to opt out, HELP for help. Consent not required to purchase. See our <a href=/terms target=_blank>Terms</a> and <a href=/privacy target=_blank>Privacy Policy</a>.</span></span></label></div>
 <div class=full><button class="btn p">Continue to payment</button></div></form>
-<script>async function zq(v){{if(v.length<5){{zres.textContent='';return}}const r=await (await fetch('/api/delivery?zip='+v)).json();
+<script>
+const SZ=`{sz_opts}`;
+let lineN=0; const DEP={DEPOSIT_PERCENT};
+function addLine(sz, dt){{
+  const i=lineN++;
+  const row=document.createElement('div'); row.className='card'; row.style.margin='8px 0'; row.dataset.i=i;
+  row.innerHTML=`<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
+    <div><label>Container</label><select name=size_${{i}}>${{SZ}}</select></div>
+    <div><label>Delivery date</label><input name=date_${{i}} type=date required></div>
+    <button type=button class=btn onclick="this.closest('.card').remove();syncLegacy();est()">Remove</button></div>`;
+  if(sz){{ const s=row.querySelector('select'); if([...s.options].some(o=>o.value===sz)) s.value=sz; }}
+  if(dt) row.querySelector('input[type=date]').value=dt;
+  lines.appendChild(row); syncLegacy(); est();
+}}
+function syncLegacy(){{
+  const first=lines.querySelector('[name^=size_]'); const fd=lines.querySelector('[name^=date_]');
+  legacySize.value=first?first.value:'{esc(size)}'; legacyDate.value=fd?fd.value:'';
+}}
+async function zq(v){{if(v.length<5){{zres.textContent='';est();return}}const r=await (await fetch('/api/delivery?zip='+v)).json();
 zres.textContent=r.error?r.error:(r.fee==null?`${{r.miles}} road mi — over 100 mi: call for a quote at (855) 768-YARD (855-768-9273). Online payment not available.`:`${{r.miles}} road mi · delivery $${{r.fee}}`);
-const b=document.querySelector('form.form button');const m=document.querySelector('[name=mode]');const block=r.fee==null&&!(m&&m.value=='pickup');b.disabled=block;b.textContent=block?'Call for quote — (855) 768-YARD':'Continue to payment'}}</script>""")
+const b=document.querySelector('form.form button.p');const m=document.querySelector('[name=mode]');const block=r.fee==null&&!(m&&m.value=='pickup');b.disabled=!!block;b.textContent=block?'Call for quote — (855) 768-YARD':'Continue to payment'; window._fee=r.fee;est()}}
+function est(){{
+  const fee=(modeSel.value==='pickup')?0:(window._fee||0);
+  const n=lines.querySelectorAll('[name^=size_]').length||1;
+  totals.innerHTML=`<p class=sub>Estimated ${{n}} container(s). Delivery band $${{fee||0}} each when delivered. Deposit ${{DEP}}% due now; balance by your selected plan. Final totals on the next screen.</p>`;
+  syncLegacy();
+}}
+modeSel.addEventListener('change',()=>zq(zip.value));
+addLine('{esc(size)}','');
+</script>""")
 
 def pay_page(o):
     one, mon = o["one_time"], o["monthly"]
+    dlines = order_lines(o["id"])
     dl = f"ZIP {o['zip']}, ~{o['miles']} road mi" if o['zip'] else "yard pickup"
-    lines = (f"<li>{LABEL[o['product']]} {size_label(o['size'])} ({o['mode']}) — box ${one-(o['delivery_fee'] or 0):,}</li><li>Delivery ({esc(dl)}) ${o['delivery_fee'] or 0}</li><li>Total <b>${one:,}</b></li>" if not mon else
-             f"<li>{LABEL[o['product']]} {size_label(o['size'])} — <b>${mon}/month</b> (subscription)</li><li>Delivery fee ({esc(dl)}) <b>${one}</b> (one-time)</li>")
-    btn = ("<form method=post action='/demo/pay/%s'><button class='btn p'>Simulate successful payment (demo)</button></form>" % o["id"]) if DEMO else \
-          ("<form method=post action='/stripe/session/%s'><button class='btn p'>Pay with Stripe</button></form>" % o["id"])
+    items = []
+    for ln in dlines:
+        items.append(f"<li>Line {ln['line_no']}: {LABEL.get(ln['product'], ln['product'])} {size_label(ln['size'])} on {esc(ln['delivery_date'])} — "
+                     f"box ${ln['container_price']:,} · transport ${ln['transport_fee'] or 0} · fuel ${ln['fuel_fee'] or 0} · weather ${ln['weather_fee'] or 0} · <b>${ln['line_total']:,}</b></li>")
+    if not items:
+        items = [f"<li>{LABEL[o['product']]} {size_label(o['size'])} ({o['mode']}) — box ${one-(o['delivery_fee'] or 0):,}</li>",
+                 f"<li>Delivery ({esc(dl)}) ${o['delivery_fee'] or 0}</li>"]
+    dep = amount_due_now(o)
+    bal = o["balance"] if o["balance"] is not None else max(0, one - dep)
+    plan = o["payment_plan"] or "per_delivery"
+    if mon:
+        lines = f"<li>{LABEL[o['product']]} {size_label(o['size'])} — <b>${mon}/month</b> (subscription)</li><li>Delivery fee ({esc(dl)}) <b>${one}</b> (one-time)</li>"
+        due_note = ""
+    else:
+        lines = "".join(items) + f"<li>Order total <b>${one:,}</b></li><li>Deposit due now ({DEPOSIT_PERCENT}%) <b>${dep:,}</b></li><li>Balance ${bal:,} via <b>{esc(plan)}</b></li>"
+        due_note = ""
+    btn_label_demo = "Simulate deposit payment (demo)" if not mon else "Simulate successful payment (demo)"
+    btn_label_live = "Pay deposit with Stripe" if not mon else "Pay with Stripe"
+    btn = (f"<form method=post action='/demo/pay/{o['id']}'><button class='btn p'>{btn_label_demo}</button></form>" if DEMO else
+           f"<form method=post action='/stripe/session/{o['id']}'><button class='btn p'>{btn_label_live}</button></form>")
     return page("Pay", f"""<div class=eyebrow>Order {esc(o['id'])}</div><h2>Review &amp; pay</h2>
-<div class=card><ul class=l>{lines}</ul><p class=sub>{esc(o['name'])} · {esc(o['address'])} · requested {esc(o['date'])}</p>
-<p class=sub>Status: <b>{esc(o['status'])}</b></p>{btn if o['status']!='paid' else '<p>Paid ✔ — <a href="/success/'+o['id']+'">view</a></p>'}</div>""")
+<div class=card><ul class=l>{lines}{due_note}</ul><p class=sub>{esc(o['name'])} · {esc(o['address'])}</p>
+<p class=sub>Status: <b>{esc(o['status'])}</b></p>{btn if o['status']!='paid' else '<p>Deposit paid ✔ — <a href="/success/'+o['id']+'">view</a></p>'}</div>""")
+
+
 
 def po_html(o):
-    fees = f"<tr><td>Delivery</td><td>ZIP {esc(o['zip'])} · ~{o['miles']} road mi (est., straight-line × {ROAD_FACTOR}) · fee ${o['delivery_fee']}</td></tr>" if o['zip'] else "<tr><td>Delivery</td><td>Yard pickup</td></tr>"
+    dlines = order_lines(o["id"])
+    fees = ""
+    for ln in dlines:
+        fees += (f"<tr><td>Line {ln['line_no']} ({esc(ln['delivery_date'])})</td><td>{size_label(ln['size'])} · "
+                 f"transport ${ln['transport_fee'] or 0} · fuel ${ln['fuel_fee'] or 0} · weather ${ln['weather_fee'] or 0} · "
+                 f"box ${ln['container_price'] or 0} · total ${ln['line_total'] or 0} · {esc(ln['status'])} · box {esc(ln['container_id'] or '—')}</td></tr>")
+    if not fees:
+        fees = f"<tr><td>Delivery</td><td>ZIP {esc(o['zip'])} · ~{o['miles']} road mi (est., straight-line × {ROAD_FACTOR}) · fee ${o['delivery_fee']}</td></tr>" if o['zip'] else "<tr><td>Delivery</td><td>Yard pickup</td></tr>"
     if o["product"] in ("rent", "lease", "rto"): fees += f"<tr><td>Swap / pickup fee (as needed)</td><td>${o['delivery_fee']} each (same band)</td></tr>"
     return page(f"Work Order {o['id']}", f"""<div class=eyebrow>Work order / PO</div><h2>{esc(o['id'])}</h2>
 <table class=t><tr><td>Created</td><td>{esc(o['created'])}</td></tr><tr><td>Customer</td><td>{esc(o['name'])} · {esc(o['phone'])} · {esc(o['email'])} · texts: {'opted in' if o['sms_opt_in'] else 'no'}</td></tr>
 <tr><td>Service</td><td>{LABEL[o['product']]} — {size_label(o['size'])} ({esc(o['mode'])})</td></tr><tr><td>Container</td><td>{esc(o['container_id'])}</td></tr>
 <tr><td>Deliver to</td><td>{esc(o['address'])}</td></tr><tr><td>Scheduled</td><td>{esc(o['date'])}</td></tr>
 <tr><td>Assigned</td><td>Driver {o['driver']} · Truck {o['driver']}</td></tr><tr><td>Site notes</td><td>{esc(o['notes']) or '—'}</td></tr>
-<tr><td>Charges</td><td>{'$%s one-time' % format(o['one_time'],',') if not o['monthly'] else '$%s/mo + $%s delivery' % (o['monthly'], o['one_time'])}</td></tr>{fees}
+<tr><td>Charges</td><td>{'$%s one-time' % format(o['one_time'],',') if not o['monthly'] else '$%s/mo + $%s delivery' % (o['monthly'], o['one_time'])} · deposit ${o['deposit'] or 0} · balance ${o['balance'] or 0} · plan {esc(o['payment_plan'] or '')}</td></tr>{fees}
 <tr><td>Payment</td><td>{esc(o['status'])}{' (DEMO — simulated)' if (o['stripe_session'] or '').startswith('demo') else ''}</td></tr></table>
 <p class=sub style="margin-top:24px">Driver checklist: confirm access (20': ~70–80 ft, 40': ~120–130 ft straight), overhead clearance, level ground; photo container on drop; customer signature.</p>
 <p class=sub>Signature: ______________________ Date: __________</p>""", "<a href='/admin'>Admin</a>")
 
+
 def admin_page():
-    c = db(); orders = c.execute("select * from orders order by date, driver").fetchall(); boxes = c.execute("select * from containers order by id").fetchall(); c.close()
-    dates = sorted({o["date"] for o in orders if o["status"] == "paid"})
+    c = db(); orders = c.execute("select * from orders order by date, driver").fetchall(); boxes = c.execute("select * from containers order by id").fetchall()
+    lines = c.execute("select * from delivery_lines order by order_id, line_no").fetchall()
+    insts = c.execute("select * from installments order by order_id, seq").fetchall(); c.close()
+    by_order = {}
+    for ln in lines: by_order.setdefault(ln["order_id"], []).append(ln)
+    by_inst = {}
+    for i in insts: by_inst.setdefault(i["order_id"], []).append(i)
+    dates = sorted({ln["delivery_date"] for ln in lines if ln["delivery_date"]} | {o["date"] for o in orders if o["status"] == "paid" and o["date"]})
     board = "<table class=t><tr><th>Date</th>" + "".join(f"<th>Driver {i} / Truck {i}</th>" for i in (1,2,3)) + "</tr>"
     for dt in dates:
-        board += f"<tr><td>{dt}</td>" + "".join("<td>" + "<br>".join(f"<a href='/po/{o['id']}'>{o['id']}</a> {LABEL[o['product']]} {size_label(o['size'])} · {esc(o['address'])}" for o in orders if o["date"]==dt and o["driver"]==i and o["status"]=="paid") + "</td>" for i in (1,2,3)) + "</tr>"
+        cells = []
+        for i in (1, 2, 3):
+            bits = []
+            for ln in lines:
+                if ln["delivery_date"] == dt and ln["driver"] == i:
+                    bits.append(f"<a href='/po/{ln['order_id']}'>{ln['order_id']}</a> L{ln['line_no']} {size_label(ln['size'])} · {esc(ln['status'])}")
+            cells.append("<br>".join(bits))
+        board += f"<tr><td>{dt}</td>" + "".join(f"<td>{c or ''}</td>" for c in cells) + "</tr>"
     board += "</table>"
-    ol = "<table class=t><tr><th>Order</th><th>Customer</th><th>Product</th><th>Status</th><th>Texts</th><th>Box</th><th>Driver</th><th>PO</th></tr>" + "".join(
-        f"<tr><td>{o['id']}</td><td>{esc(o['name'])}</td><td>{LABEL[o['product']]} {size_label(o['size'])}</td><td>{o['status']}</td><td>{'✔ opted in' if o['sms_opt_in'] else '—'}</td><td>{esc(o['container_id'] or '')}</td><td>{o['driver'] or ''}</td><td>{'<a href=/po/'+o['id']+'>PO</a>' if o['status']=='paid' else '<a href=/pay/'+o['id']+'>pay link</a>'}</td></tr>" for o in orders) + "</table>"
+    ol_rows = []
+    for o in orders:
+        dls = by_order.get(o["id"], [])
+        line_html = "<br>".join(
+            f"L{ln['line_no']} {size_label(ln['size'])} {esc(ln['delivery_date'])} "
+            f"${ln['line_total']} [{esc(ln['status'])}] "
+            + (f"<form style='display:inline' method=post action='/admin/charge-line/{ln['id']}'><button class=btn>Charge balance for this delivery</button></form> "
+               if o['status']=='paid' and o['payment_plan']=='per_delivery' and ln['status']=='scheduled' else "")
+            + (f"<form style='display:inline' method=post action='/admin/dispatch-line/{ln['id']}'><button class=btn>Dispatch</button></form>"
+               if o['status']=='paid' and ln['status'] in ('charged','scheduled') else "")
+            for ln in dls) or "—"
+        inst_html = "<br>".join(
+            f"#{i['seq']} ${i['amount']} due {esc(i['due_date'])} [{esc(i['status'])}] "
+            + (f"<form style='display:inline' method=post action='/admin/charge-installment/{i['id']}'><button class=btn>Charge installment</button></form>"
+               if o['status']=='paid' and i['status']!='paid' else "")
+            for i in by_inst.get(o["id"], [])) or "—"
+        ol_rows.append(
+            f"<tr><td>{o['id']}<div class=sub>plan {esc(o['payment_plan'] or '')} · deposit ${o['deposit'] or 0} · bal ${o['balance'] or 0}</div></td>"
+            f"<td>{esc(o['name'])}</td><td>{LABEL.get(o['product'], o['product'])} {size_label(o['size'])}</td>"
+            f"<td>{o['status']}</td><td>{'✔ opted in' if o['sms_opt_in'] else '—'}</td>"
+            f"<td>{esc(o['container_id'] or '')}</td><td>{o['driver'] or ''}</td>"
+            f"<td>{'<a href=/po/'+o['id']+'>PO</a>' if o['status']=='paid' else '<a href=/pay/'+o['id']+'>pay link</a>'}</td></tr>"
+            f"<tr><td colspan=8><div class=sub><b>Delivery lines</b><br>{line_html}<br><b>Installments</b><br>{inst_html}</div></td></tr>")
+    ol = "<table class=t><tr><th>Order</th><th>Customer</th><th>Product</th><th>Status</th><th>Texts</th><th>Box</th><th>Driver</th><th>PO</th></tr>" + "".join(ol_rows) + "</table>"
     inv = "<table class=t><tr><th>ID</th><th>Size</th><th>Status</th><th>Order</th></tr>" + "".join(
         f"<tr><td>{b['id']}</td><td>{size_label(b['size'])}</td><td><span class='pill {b['status']}'>{b['status']}</span></td><td>{esc(b['order_id'] or '')}</td></tr>" for b in boxes) + "</table>"
     return page("Admin", f"""<div class=eyebrow>Back office</div><h2>Dispatch board</h2>{board}
@@ -588,10 +1023,30 @@ def admin_page():
 <p class=sub>Driver views (admin): <a href=/admin/driver/1>Driver 1</a> · <a href=/admin/driver/2>Driver 2</a> · <a href=/admin/driver/3>Driver 3</a></p>
 <h2 style="margin-top:48px">Orders</h2>{ol}<h2 style="margin-top:48px">Container inventory</h2>{inv}""", "<a href='/admin'>Admin</a>")
 
+
+
 def driver_page(n, po_prefix='/po/'):
-    c = db(); name = setting(c, f'driver{n}_name', f'Driver {n}'); jobs = c.execute("select * from orders where driver=? and status='paid' order by date", (n,)).fetchall(); c.close()
-    rows = "".join(f"<div class=card style='margin-bottom:16px'><div class=step>{o['date']}</div><h3>{LABEL[o['product']]} — {size_label(o['size'])} · {esc(o['container_id'])}</h3><p>{esc(o['address'])}</p><p class=sub>{esc(o['name'])} · {esc(o['phone'])} · Notes: {esc(o['notes']) or '—'}</p><a class=btn href='{po_prefix}{o['id']}'>Work order</a></div>" for o in jobs) or "<p class=sub>No jobs assigned.</p>"
-    return page(f"Driver {n}", f"<div class=eyebrow>{esc(name)} · Truck {n}</div><h2>My jobs</h2>{rows}", "<a href='/driver/logout'>Sign out</a>" if po_prefix != '/po/' else "<a href='/admin'>Admin</a>")
+    c = db(); name = setting(c, f'driver{n}_name', f'Driver {n}')
+    jobs = c.execute("select * from delivery_lines where driver=? and status in ('scheduled','charged','dispatched') order by delivery_date", (n,)).fetchall()
+    # Fallback to legacy order-level assignment when lines have no driver yet
+    if not jobs:
+        orders = c.execute("select * from orders where driver=? and status='paid' order by date", (n,)).fetchall()
+        c.close()
+        rows = "".join(f"<div class=card style='margin-bottom:16px'><div class=step>{o['date']}</div><h3>{LABEL[o['product']]} — {size_label(o['size'])} · {esc(o['container_id'])}</h3><p>{esc(o['address'])}</p><p class=sub>{esc(o['name'])} · {esc(o['phone'])} · Notes: {esc(o['notes']) or '—'}</p><a class=btn href='{po_prefix}{o['id']}'>Work order</a></div>" for o in orders) or "<p class=sub>No jobs assigned.</p>"
+        return page(f"Driver {n}", f"<div class=eyebrow>{esc(name)} · Truck {n}</div><h2>My jobs</h2>{rows}", "<a href='/driver/logout'>Sign out</a>" if po_prefix != '/po/' else "<a href='/admin'>Admin</a>")
+    # Enrich with order customer fields
+    rows = []
+    for ln in jobs:
+        o = c.execute("select * from orders where id=?", (ln["order_id"],)).fetchone()
+        rows.append(f"<div class=card style='margin-bottom:16px'><div class=step>{esc(ln['delivery_date'])} · line {ln['line_no']} · {esc(ln['status'])}</div>"
+                    f"<h3>{LABEL.get(ln['product'],'') } — {size_label(ln['size'])} · {esc(ln['container_id'])}</h3>"
+                    f"<p>{esc(o['address'] if o else '')}</p>"
+                    f"<p class=sub>{esc(o['name'] if o else '')} · {esc(o['phone'] if o else '')} · Notes: {esc(o['notes'] if o else '') or '—'}</p>"
+                    f"<a class=btn href='{po_prefix}{ln['order_id']}'>Work order</a></div>")
+    c.close()
+    return page(f"Driver {n}", f"<div class=eyebrow>{esc(name)} · Truck {n}</div><h2>My jobs</h2>{''.join(rows) or '<p class=sub>No jobs assigned.</p>'}",
+                "<a href='/driver/logout'>Sign out</a>" if po_prefix != '/po/' else "<a href='/admin'>Admin</a>")
+
 
 def legal_page(name):
     body = open(os.path.join(ROOT, "static", name + ".html")).read()
@@ -747,8 +1202,16 @@ class H(BaseHTTPRequestHandler):
             code, out = voice_order(d); return self.send(code, json.dumps(out), "application/json", jh)
         if p == "/api/chat":
             d = json.loads(raw or "{}"); return self.send(200, json.dumps({"reply": chat(d.get("sid","anon"), d.get("message",""))}), "application/json")
+        if p.startswith("/admin/charge-line/") or p.startswith("/admin/dispatch-line/") or p.startswith("/admin/charge-installment/"):
+            if not self.authed(): return
+            if p.startswith("/admin/charge-line/"):
+                ok, msg = charge_delivery_line(p.split("/admin/charge-line/")[1], demo=True); return self.redirect("/admin")
+            if p.startswith("/admin/dispatch-line/"):
+                ok, msg = dispatch_delivery_line(p.split("/admin/dispatch-line/")[1]); return self.redirect("/admin")
+            ok, msg = charge_installment(p.split("/admin/charge-installment/")[1], demo=True); return self.redirect("/admin")
         if p == "/order":
-            f = {k: v[0] for k, v in urllib.parse.parse_qs(raw.decode()).items()}
+            # parse_qs with keep blank; multi-value size_N fields use first value each
+            f = {k: v[0] for k, v in urllib.parse.parse_qs(raw.decode(), keep_blank_values=True).items()}
             if f.get("product") != "buy": f["mode"] = "delivered"
             try: return self.redirect("/pay/" + create_order(f))
             except ValueError as e:
@@ -783,8 +1246,8 @@ class H(BaseHTTPRequestHandler):
                 if ok and oid:
                     o = self.order(oid)
                     if not o: logging.warning("Stripe event for unknown order %s", oid)
-                    elif typ.startswith("checkout.session") and (obj.get("amount_total") or 0) < (o["one_time"] + o["monthly"]) * 100:
-                        logging.error("Stripe amount %s < order %s total %s: NOT marking paid", obj.get("amount_total"), oid, (o["one_time"] + o["monthly"]) * 100)
+                    elif typ.startswith("checkout.session") and (obj.get("amount_total") or 0) < (amount_due_now(o) + (o["monthly"] or 0)) * 100:
+                        logging.error("Stripe amount %s < order %s due-now %s: NOT marking paid", obj.get("amount_total"), oid, (amount_due_now(o) + (o["monthly"] or 0)) * 100)
                     else:
                         try:
                             if mark_paid(oid, obj.get("id") if typ.startswith("checkout.session") else None): logging.info("order %s marked paid via Stripe", oid)

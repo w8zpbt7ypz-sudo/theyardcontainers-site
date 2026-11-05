@@ -34,7 +34,7 @@ def new_order(**kw):
     return server.create_order(d)
 def event(oid, typ="checkout.session.completed", amount=None, status="paid", sid="cs_test_123", meta=True):
     o = server.db().execute("select * from orders where id=?", (oid,)).fetchone()
-    tot = (o["one_time"] + o["monthly"]) * 100 if o else 100
+    tot = (server.amount_due_now(o) + (o["monthly"] or 0)) * 100 if o else 100
     obj = {"id": sid, "object": "checkout.session", "payment_status": status,
            "amount_total": amount if amount is not None else tot, "client_reference_id": oid}
     if meta: obj["metadata"] = {"order_id": oid}
@@ -62,7 +62,7 @@ class T(unittest.TestCase):
         c, _, h = req("/stripe/session/" + o, b"")
         self.assertEqual(c, 303); self.assertEqual(h["Location"], "https://checkout.stripe.com/c/pay/cs_test_123")
         f = seen[-1]["form"]; self.assertEqual(seen[-1]["path"], "/v1/checkout/sessions"); self.assertEqual(seen[-1]["auth"], "Bearer sk_test_abc")
-        self.assertEqual(f["mode"], ["payment"]); self.assertEqual(f["line_items[0][price_data][unit_amount]"], ["194500"])
+        self.assertEqual(f["mode"], ["payment"]); self.assertEqual(f["line_items[0][price_data][unit_amount]"], [str(server.amount_due_now(server.db().execute("select * from orders where id=?", (o,)).fetchone()) * 100)])
         self.assertEqual(f["metadata[order_id]"], [o]); self.assertEqual(f["client_reference_id"], [o])
         self.assertEqual(f["success_url"], [f"https://theyardcontainers.com/success/{o}"]); self.assertEqual(f["cancel_url"], [f"https://theyardcontainers.com/pay/{o}"])
         self.assertEqual(f["payment_intent_data[metadata][order_id]"], [o]); self.assertEqual(f["customer_email"], ["pat@example.com"])
@@ -71,7 +71,7 @@ class T(unittest.TestCase):
     def test_session_amount_delivered_includes_fee(self):
         o = new_order(mode="delivered", zip="49048"); row = server.db().execute("select * from orders where id=?", (o,)).fetchone(); seen.clear()
         req("/stripe/session/" + o, b"")
-        self.assertEqual(seen[-1]["form"]["line_items[0][price_data][unit_amount]"], [str(row["one_time"] * 100)]); self.assertGreater(row["one_time"], 1945)
+        self.assertEqual(seen[-1]["form"]["line_items[0][price_data][unit_amount]"], [str(server.amount_due_now(row) * 100)]); self.assertGreater(row["one_time"], 1945)
     def test_session_no_email_and_unknown_order_and_stripe_error(self):
         o = new_order(email=""); seen.clear(); req("/stripe/session/" + o, b""); self.assertNotIn("customer_email", seen[-1]["form"])
         self.assertEqual(req("/stripe/session/ORD-NOPE", b"")[0], 404)
