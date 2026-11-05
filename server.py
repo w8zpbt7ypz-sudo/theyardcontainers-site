@@ -503,7 +503,7 @@ def page(title, body, sub=""):
     return f"""<!DOCTYPE html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{title}</title><style>{CSS}</style></head>
 <body><header><div class="wrap nav"><a href="/" class="logo">THE YARD <span>CONTAINERS</span></a><nav><a href="/#buy">Buy</a>{RENT_NAV if RENTALS_ON else ''}{sub}</nav></div></header>
 {('<div class="demo-bar">DEMO PAYMENT MODE — no Stripe key set; payments are simulated, nothing is charged.</div>' if DEMO else '')}
-<main class="wrap" style="padding:48px 24px">{body}</main></body></html>"""
+<main class="wrap" style="padding:48px 24px">{body}</main><footer><div class="wrap">© 2026 The Yard Containers, a sole proprietorship of Santiago Moncada · Comstock Township, MI · <a href="tel:+18557689273">(855) 768-YARD (855-768-9273)</a> · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms &amp; Conditions</a></div></footer></body></html>"""
 
 def esc(x): return html.escape(str(x if x is not None else ""))
 
@@ -542,7 +542,7 @@ def checkout_form(q):
 <div><label>Name</label><input name=name required></div><div><label>Phone</label><input name=phone required></div>
 <div><label>Email</label><input name=email type=email required></div><div><label>Delivery address</label><input name=address required></div>
 <div class=full><label>Site conditions / notes</label><textarea name=notes rows=3></textarea></div>
-<div class=full><label style="display:flex;gap:8px;align-items:flex-start;font-weight:normal"><input type=checkbox name=sms_opt_in value=1 style="width:auto;margin-top:4px"> <span>Text me updates about my order<br><span class=sub style="font-size:.85em">By checking this box, you agree to receive order-related text messages from The Yard Containers at the phone number above. Msg &amp; data rates may apply. Msg frequency varies. Reply STOP to opt out, HELP for help. Consent not required to purchase.</span></span></label></div>
+<div class=full><label style="display:flex;gap:8px;align-items:flex-start;font-weight:normal"><input type=checkbox name=sms_opt_in value=1 style="width:auto;margin-top:4px"> <span>Text me updates about my order<br><span class=sub style="font-size:.85em">By checking this box, you agree to receive order-related text messages from The Yard Containers at the phone number above. Msg &amp; data rates may apply. Msg frequency varies. Reply STOP to opt out, HELP for help. Consent not required to purchase. See our <a href=/terms target=_blank>Terms</a> and <a href=/privacy target=_blank>Privacy Policy</a>.</span></span></label></div>
 <div class=full><button class="btn p">Continue to payment</button></div></form>
 <script>async function zq(v){{if(v.length<5){{zres.textContent='';return}}const r=await (await fetch('/api/delivery?zip='+v)).json();
 zres.textContent=r.error?r.error:(r.fee==null?`${{r.miles}} road mi — over 100 mi: call for a quote at (855) 768-YARD (855-768-9273). Online payment not available.`:`${{r.miles}} road mi · delivery $${{r.fee}}`);
@@ -593,6 +593,10 @@ def driver_page(n, po_prefix='/po/'):
     rows = "".join(f"<div class=card style='margin-bottom:16px'><div class=step>{o['date']}</div><h3>{LABEL[o['product']]} — {size_label(o['size'])} · {esc(o['container_id'])}</h3><p>{esc(o['address'])}</p><p class=sub>{esc(o['name'])} · {esc(o['phone'])} · Notes: {esc(o['notes']) or '—'}</p><a class=btn href='{po_prefix}{o['id']}'>Work order</a></div>" for o in jobs) or "<p class=sub>No jobs assigned.</p>"
     return page(f"Driver {n}", f"<div class=eyebrow>{esc(name)} · Truck {n}</div><h2>My jobs</h2>{rows}", "<a href='/driver/logout'>Sign out</a>" if po_prefix != '/po/' else "<a href='/admin'>Admin</a>")
 
+def legal_page(name):
+    body = open(os.path.join(ROOT, "static", name + ".html")).read()
+    return page("Privacy Policy — The Yard Containers" if name == "privacy" else "Terms & Conditions — The Yard Containers", body)
+
 def home():
     body = open(os.path.join(ROOT, "static", "index.html")).read()
     keep, drop = ("rentals", "salesonly") if RENTALS_ON else ("salesonly", "rentals")
@@ -639,6 +643,8 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path); p = u.path; q = urllib.parse.parse_qs(u.query)
         if p == "/": return self.send(200, home())
         if p == "/checkout": return self.send(200, checkout_form(q))
+        if p == "/privacy": return self.send(200, legal_page("privacy"))
+        if p == "/terms": return self.send(200, legal_page("terms"))
         if p == "/preview/catalog":
             if not self.authed(): return
             return self.send(200, catalog_page(), headers={"X-Robots-Tag": "noindex"})
